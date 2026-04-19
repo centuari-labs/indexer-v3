@@ -10,6 +10,14 @@ M8 is the custom Node.js/TypeScript indexer that replaces the legacy Ponder-base
 
 M8 is unblocked (M1–M5 done). Starting M8 also lands **P5** (collateral event processor) and **P4** (backend flag/unflag endpoints) inside the same window, because both need the C10 helper and the event processor that only exist once M8 is live.
 
+## Prerequisites
+
+Two blockers must be resolved before Phase 1 implementation can begin.
+
+1. **ABI export.** Run `cd smart-contract-revamp && forge build && ./bin/export-abi.sh`. Five Phase 1 ABIs are currently missing from `smart-contract-revamp/abi/` (only 7 of 13 present): **WithdrawalRegistry, HubIntentSettler, SettlementLedger, SpokeDepositGateway, SpokeVaultStable**. Step 11 (remaining processors) is blocked until these land. If any contract still fails to compile, stub its processor as decode-only and file a follow-up.
+
+2. **pnpm workspace scaffolding.** Create a root `pnpm-workspace.yaml` listing every service directory (`backend-v2`, `frontend-revamp`, `matching-engine`, `settlement-engine`, `indexer-v3`, and `sweeper-bot` once it exists) and revise root `CLAUDE.md` to scope "no monorepo workspace" to "no runtime coupling" (see phase-1 §C10.3 for mechanism; the revision lands as Phase 0.4 of the doc-update pass). This unblocks Step 1's `@centuari/indexer-v3` package naming and Step 9's consumer-boundary verification.
+
 ## Goals (what "done" looks like)
 
 1. `indexer-v3` container runs on `docker-compose up -d` and reaches `GET /health` OK within 30s, with per-chain block-lag < 10s on testnet.
@@ -48,7 +56,7 @@ indexer-v3/
 │   │   ├── migrations/001_init.sql      # see schema below
 │   │   └── migrate.ts                   # sequential runner (pattern from matching-engine)
 │   ├── api/
-│   │   ├── server.ts                    # Fastify / Hono (pick one — recommend Hono for consistency with backend)
+│   │   ├── server.ts                    # Fastify (per indexer-v3/CLAUDE.md)
 │   │   └── routes/
 │   │       ├── balance.ts
 │   │       ├── portfolio.ts
@@ -65,7 +73,7 @@ indexer-v3/
 │   └── integration/                     # uses anvil fork + ephemeral Postgres
 ├── Dockerfile                           # multi-stage node:22-alpine
 ├── package.json                         # pnpm
-├── tsconfig.json                        # ES2020, CommonJS (matches matching-engine)
+├── tsconfig.json                        # ES2022, module: nodenext, strict + noUncheckedIndexedAccess (per indexer-v3/CLAUDE.md)
 └── .env.example
 ```
 
@@ -191,7 +199,7 @@ Consumers: backend-v2 (`/collateral/flag`, `/collateral/unflag`, deposits, withd
 
 ## REST API
 
-Hono + Zod. JSON only. All reads protected by optional Privy JWT (authoritative list of who owns what goes through backend; indexer is read-only public portfolio data).
+Fastify + Zod. JSON only. All reads protected by optional Privy JWT (authoritative list of who owns what goes through backend; indexer is read-only public portfolio data).
 
 | Method | Path | Consumer | Returns |
 |---|---|---|---|
@@ -218,7 +226,22 @@ Latency budget: matching-engine balance read must be sub-ms on the same docker n
 
 Each step ends with a green test run before moving on.
 
-1. **Scaffold repo** — `pnpm init`, `tsconfig.json` (ES2020/CJS), Dockerfile (node:22-alpine multi-stage), `.env.example`, `package.json` scripts (`dev`, `build`, `start`, `migrate`, `test`).
+1. **Scaffold repo.** All under `indexer-v3/`:
+   - `package.json` — pnpm. Fields: `"name": "@centuari/indexer-v3"`, `"main": "./dist/index.js"`, `"types": "./dist/index.d.ts"`. Declare the helper as a first-class import subpath so consumers (`backend-v2`, `settlement-engine`, future `sweeper-bot`) can import it as `@centuari/indexer-v3/shared/apply-on-chain-effect`:
+     ```jsonc
+     "exports": {
+       ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+       "./shared/apply-on-chain-effect": {
+         "types": "./dist/shared/apply-on-chain-effect.d.ts",
+         "default": "./dist/shared/apply-on-chain-effect.js"
+       }
+     }
+     ```
+     Scripts: `dev` (tsx watch), `build` (tsc), `start`, `migrate`, `copy-abi`, `test`, `lint`, `format`, `typecheck`.
+   - `tsconfig.json` — `target: ES2022`, `module: nodenext`, `moduleResolution: nodenext`, `strict: true`, `noUncheckedIndexedAccess: true`, `declaration: true`, `sourceMap: true`, `outDir: dist`, `rootDir: src`, `resolveJsonModule: true`, `esModuleInterop: true`. Emitting the full `src/` tree ensures `dist/shared/apply-on-chain-effect.{js,d.ts}` exists as a real file that the `exports` subpath resolves to.
+   - `biome.json` — copy verbatim from [backend-v2/biome.json](backend-v2/biome.json).
+   - `Dockerfile` — multi-stage, `node:22-alpine`, pnpm via corepack. Production stage must `COPY --from=builder /app/dist ./dist` (the full compiled tree, not only the server entry) so the helper subpath is present at runtime.
+   - `.env.example`, `.gitignore`, `src/index.ts` stub.
 2. **Config + chains** — `src/config/env.ts` Zod-validated, `src/config/chains.ts` registry.
 3. **Logger + metrics** — Pino JSON to stdout, prom-client `/metrics` endpoint skeleton.
 4. **DB pool + migration runner** — `pg` Pool, sequential runner from `db/migrations/`. Land `001_init.sql`.
@@ -226,8 +249,8 @@ Each step ends with a green test run before moving on.
 6. **ChainWatcher skeleton** — connects to one chain, tails blocks, persists cursor.
 7. **Event dispatcher + ABI loader** — decodes logs via viem, routes by event topic.
 8. **Processor: `balance-ledger.processor.ts`** — implement `Credited`, `Debited`, and **`CollateralFlagSet` (5-param)**. This is the P5 deliverable — test decoder against a live contract emit. Stamp `applied_by_*`.
-9. **`applyOnChainEffect` helper** — ship as internal module; export for backend consumption. Unit tests cover: success, tx reverted, event missing, predicate fails, duplicate-call skip.
-10. **REST API: `/health`, `/balance`, `/collateral`, `/portfolio`** — Hono routes + Zod response schemas. Integration test boots indexer + seeded Postgres and hits endpoints.
+9. **`applyOnChainEffect` helper** — ship at `src/shared/apply-on-chain-effect.ts`; compiled output at `dist/shared/apply-on-chain-effect.{js,d.ts}`. Unit tests cover: success, tx reverted, event missing, predicate fails, duplicate-call skip. **Blocking before Step 10: verify the workspace package boundary.** In a scratch `packages/_boundary-check` workspace member (or a temporary sibling service): add `"@centuari/indexer-v3": "workspace:*"` to its `package.json`, run `pnpm install`, write a 10-line script importing `applyOnChainEffect` from `@centuari/indexer-v3/shared/apply-on-chain-effect`, run `tsc --noEmit` — must compile cleanly with full types. Then run `pnpm deploy --filter=_boundary-check --prod /tmp/out` and confirm `/tmp/out/node_modules/@centuari/indexer-v3/dist/shared/apply-on-chain-effect.js` is present. This proves the prod container shape (used by backend-v2 / settlement-engine / sweeper-bot Dockerfiles per phase-1 §C10.3) actually works end-to-end.
+10. **REST API: `/health`, `/balance`, `/collateral`, `/portfolio`** — Fastify routes + Zod response schemas. Integration test boots indexer + seeded Postgres and hits endpoints.
 11. **Remaining processors** — centuari, hub-depositor, hub-intent-settler, withdrawal-registry, spoke-deposit-gateway, spoke-vault. settlement-ledger is decode-only stub (dormant Phase 1).
 12. **Multi-chain integration** — wire all 5 chains via env. Smoke-test against Arbitrum Sepolia + Base Sepolia using real RPC.
 13. **Docker-compose wiring** — update the existing `indexer-v2` service block in `docker-compose.yml` (lines 131–147) to `indexer-v3` + bump context + env path. Verify `docker-compose up -d` brings it up healthy.
@@ -242,6 +265,7 @@ Each step ends with a green test run before moving on.
 - `smart-contract-revamp/src/interfaces/ICentuari.sol`, `ISettlement.sol`, `cross-chain/IHubIntentSettler.sol`, `IWithdrawalRegistry.sol`, `ISettlementLedger.sol` — every event topic the indexer subscribes to.
 - `smart-contract-revamp/abi/` — generated ABIs; run `./bin/export-abi.sh` before starting and copy into `indexer-v3/abi/`.
 - `matching-engine/` — pattern reference for Pino logging, migration runner, pg Pool usage, TS config.
+- Root `pnpm-workspace.yaml` (Prerequisite 2) — workspace definition enabling `@centuari/indexer-v3` imports from `backend-v2`, `settlement-engine`, and future `sweeper-bot`. See phase-1 §C10.3 for the full distribution mechanism.
 
 ## Non-goals for M8
 
@@ -257,3 +281,68 @@ Each step ends with a green test run before moving on.
 - `curl http://localhost:42069/health` returns per-chain block lag.
 - Forked-chain integration test drives a `CollateralFlagSet` emit and asserts the DB row matches (used + flagged_at + applied_by_*).
 - P4+P5 acceptance test from `collateral-loophole-fix-plan.md` §Verification step 3 passes against testnet.
+- **Package boundary proven:** scratch consumer from Step 9 compiles + `pnpm deploy` output contains the helper at the expected path.
+
+## Appendix — Eager-path consumers & flows
+
+`applyOnChainEffect` is imported by every service that submits on-chain txs whose results mutate shared DB state. Authoritative spec: phase-1 §C10.1–§C10.4. Summary here for execution reference.
+
+### Consumer call-site catalog
+
+| Flow | Tx submitter | Helper call site | Confirmation endpoint? |
+|---|---|---|---|
+| Deposit (hub-native) | Frontend (wagmi, user's wallet) | backend-v2 `POST /deposit/confirm` | **Yes** |
+| Deposit (cross-chain, spoke-initiated) | Frontend (wagmi, on the spoke chain) | backend-v2 `POST /deposit/confirm` — stamps `cross_chain_deposit (state=INITIATED)` | **Yes** |
+| Lend / Repay / Withdraw / Withdraw-lend | backend-v2 (protocol settlement key) | inline after `viem.writeContract` | No |
+| Collateral flag / unflag | backend-v2 (protocol settlement key) | inline after `CollateralManager.{flagFor,unflagFor}` | No |
+| Settlement batch | settlement-engine | inline after `Settlement.settle(batch)` | No |
+| Sweeper bridge (M7) | sweeper-bot | inline after bridge tx | No |
+
+Deposit is the **only** confirmation-endpoint flow — see §C10.2 for why (user-funded tx must originate from the wallet). Every other flow is backend-direct: the service owns both the submission and the helper invocation in one handler.
+
+### Flow 1 — Deposit (frontend → backend confirmation)
+
+```
+Frontend (wagmi)
+   │ 1. user signs + sends tx on-chain (user pays gas)
+   │ 2. wait for receipt in the browser
+   ▼
+POST /deposit/confirm { txHash, sourceChain }
+   │
+   ▼
+backend-v2 handler
+   │ 3. applyOnChainEffect({ txHash, expectedEventTopic, expectedArgsPredicate, mutationFn })
+   │      - re-fetches receipt (trusts nothing from client)
+   │      - verifies status=success + expected event + args
+   │      - opens pg tx, runs mutationFn with applied_by_* stamps
+   │      - commits
+   ▼
+200 → frontend refetches portfolio, UI updates
+
+Later: indexer-v3 tail decodes the same event
+   → sees applied_by_tx_hash already set → no-op (safety net)
+```
+
+### Flow 2 — Backend-direct (all other flows)
+
+```
+Client → POST /<action>
+   │
+   ▼
+backend-v2 (or settlement-engine / sweeper-bot) handler
+   │ 1. viem.writeContract(...) → receives txHash
+   │ 2. applyOnChainEffect({ txHash, expectedEventTopic, expectedArgsPredicate, mutationFn })
+   │      inline in the same handler
+   ▼
+200
+
+Later: indexer-v3 tail → no-op (same safety net)
+```
+
+On revert (`FlagLockActive`, `WouldMakeUnhealthy`, `InsufficientChainLiquidity`, etc.), `applyOnChainEffect` sees `receipt.status=reverted`, aborts without mutating DB, and the handler decodes the custom error into an HTTP 4xx. No bespoke retry queue — the tail would have done nothing anyway because the tx reverted.
+
+### Three invariants (from phase-1 §C10.4)
+
+1. **Each service writes only the rows it transacted to update.** Side-effect events emitted by the same tx (e.g. `BalanceLedger.Debited/Credited` from `Settlement.settle`) are left to the indexer tail. Prevents duplicate mutations.
+2. **If a service has no eager writer for a given event** (e.g. the hub-side `HubIntentSettler.confirmDeposit` for spoke-initiated cross-chain deposits), the tail is the only writer. The flow still completes — just at tail latency.
+3. **If a service crashes mid-handler** between `viem.writeContract` and `applyOnChainEffect`, the tail converges the row eventually. No bespoke recovery job needed. The `applied_by_tx_hash` stamp makes double-writes a no-op regardless of write order.
