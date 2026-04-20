@@ -64,6 +64,9 @@ export async function rewindTo(
         "withdrawal_request",
         "cross_chain_deposit",
         "chain_liquidity",
+        "market",
+        "borrow_position",
+        "lend_position",
     ];
     for (const table of stampedTables) {
         await client.query(

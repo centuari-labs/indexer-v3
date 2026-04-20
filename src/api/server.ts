@@ -6,6 +6,7 @@ import { registerBalanceRoutes } from "./routes/balance.js";
 import { registerPortfolioRoutes } from "./routes/portfolio.js";
 import { registerCollateralRoutes } from "./routes/collateral.js";
 import { registerDepositsRoutes } from "./routes/deposits.js";
+import { registerPositionsRoutes } from "./routes/positions.js";
 import { registerWithdrawalsRoutes } from "./routes/withdrawals.js";
 
 export interface BuildServerOptions {
@@ -28,6 +29,7 @@ export async function buildServer(
     await registerCollateralRoutes(app, opts.pool);
     await registerDepositsRoutes(app, opts.pool);
     await registerWithdrawalsRoutes(app, opts.pool);
+    await registerPositionsRoutes(app, opts.pool);
 
     return app;
 }
