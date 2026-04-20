@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import type { Hex } from "viem";
-import { hexToBytea, byteaToHex } from "../db/bytea.js";
+import { byteaToHex, hexToBytea } from "../db/bytea.js";
+import { deleteRecentHashesAbove } from "./recent-hashes.js";
 
 export interface BlockCursorRow {
     chainId: number;
@@ -78,6 +79,9 @@ export async function rewindTo(
           WHERE chain_id = $1 AND block_number > $2`,
         [chainId, forkPointBlock.toString()],
     );
+
+    // Keep the recent-hashes buffer consistent with the rewound cursor.
+    await deleteRecentHashesAbove(client, chainId, forkPointBlock);
 
     await upsertCursor(client, {
         chainId,

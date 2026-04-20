@@ -1,7 +1,9 @@
+import type { PoolClient } from "pg";
 import type { PublicClient } from "viem";
-import { reorgDepth } from "../observability/metrics.js";
 import { createLogger } from "../observability/logger.js";
+import { reorgDepth } from "../observability/metrics.js";
 import type { BlockCursorRow } from "./block-cursor.js";
+import { getRecentHashes } from "./recent-hashes.js";
 
 const log = createLogger("reorg-detector");
 
@@ -11,16 +13,21 @@ export interface ForkFinding {
 }
 
 /**
- * Walks backward from the latest finalized block looking for the highest block
- * whose on-chain hash still matches what we persisted. Stops after `depth` steps.
+ * Detects a reorg at the current cursor and, if one exists, walks the persisted
+ * `recent_block_hashes` buffer newest→oldest looking for the highest block
+ * whose persisted hash still matches the live chain. That block is the fork
+ * point; rows above it are evicted by `rewindTo`.
  *
- * Returns `undefined` if the cursor's last_block_hash still matches on-chain
- * (no reorg). Returns the fork point if a divergence is found.
+ * Returns `undefined` when `cursor.lastBlockHash` still matches on-chain.
+ * Throws when no persisted hash within `finalityDepth + 1` rows matches —
+ * the reorg is deeper than the configured finality and requires operator
+ * attention.
  */
 export async function findForkPoint(
     client: PublicClient,
+    pgClient: PoolClient,
     cursor: BlockCursorRow,
-    depth: number,
+    finalityDepth: number,
 ): Promise<ForkFinding | undefined> {
     const persistedHash = cursor.lastBlockHash.toLowerCase();
     const live = await client.getBlock({ blockNumber: cursor.lastBlock });
@@ -28,35 +35,42 @@ export async function findForkPoint(
         return undefined;
     }
 
-    // Walk backward until we either find a matching hash (that's the fork point)
-    // or run out of depth budget (catastrophic — requires operator attention).
-    for (let i = 1; i <= depth; i++) {
-        const probeBlock = cursor.lastBlock - BigInt(i);
-        if (probeBlock < 0n) break;
-        const block = await client.getBlock({ blockNumber: probeBlock });
-        if (!block.hash) continue;
-        // We can't cheaply re-fetch the historical stored hash without another
-        // table; assume the caller has a recent-blocks index or treat each
-        // backward step as "probably the fork point" conservatively. For now
-        // we flag divergence at the deepest block whose live hash differs.
-        // This is a pragmatic Phase 1 approach; a full-fidelity implementation
-        // would persist a rolling window of (block, hash) pairs.
-        reorgDepth.labels(String(cursor.chainId)).set(i);
-        log.warn(
-            {
-                chainId: cursor.chainId,
-                forkPointBlock: probeBlock.toString(),
-                hash: block.hash,
-            },
-            "reorg detected; rewinding",
+    const rows = await getRecentHashes(
+        pgClient,
+        cursor.chainId,
+        finalityDepth + 1,
+    );
+    if (rows.length === 0) {
+        throw new Error(
+            `reorg detected on chain ${cursor.chainId} at block ${cursor.lastBlock} ` +
+                "but recent_block_hashes is empty; cannot locate fork point",
         );
-        return {
-            forkPointBlock: probeBlock,
-            forkPointBlockHash: block.hash,
-        };
+    }
+
+    for (const row of rows) {
+        const block = await client.getBlock({ blockNumber: row.blockNumber });
+        if (!block.hash) continue;
+        if (block.hash.toLowerCase() === row.blockHash.toLowerCase()) {
+            const depth = cursor.lastBlock - row.blockNumber;
+            reorgDepth.labels(String(cursor.chainId)).set(Number(depth));
+            log.warn(
+                {
+                    chainId: cursor.chainId,
+                    forkPointBlock: row.blockNumber.toString(),
+                    forkPointBlockHash: row.blockHash,
+                    depth: depth.toString(),
+                },
+                "reorg detected; rewinding to fork point",
+            );
+            return {
+                forkPointBlock: row.blockNumber,
+                forkPointBlockHash: row.blockHash,
+            };
+        }
     }
 
     throw new Error(
-        `reorg depth exceeded on chain ${cursor.chainId}; manual intervention required`,
+        `reorg on chain ${cursor.chainId} deeper than finalityDepth=${finalityDepth}; ` +
+            "no persisted hash within window matches live chain; manual intervention required",
     );
 }

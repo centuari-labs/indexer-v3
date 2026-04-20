@@ -1,12 +1,13 @@
+import type { Pool } from "pg";
 import {
+    type Address,
     createPublicClient,
     fallback,
     http,
-    webSocket,
-    type Address,
+    type Log,
     type PublicClient,
+    webSocket,
 } from "viem";
-import type { Pool } from "pg";
 import type { ChainConfig } from "../config/chains.js";
 import { createLogger } from "../observability/logger.js";
 import {
@@ -16,9 +17,16 @@ import {
 } from "../observability/metrics.js";
 import { getCursor, rewindTo, upsertCursor } from "./block-cursor.js";
 import type { EventDispatcher } from "./event-dispatcher.js";
+import { pruneRecentHashes, recordBlockHash } from "./recent-hashes.js";
 import { findForkPoint } from "./reorg-detector.js";
 
 const POLL_INTERVAL_MS = 4_000;
+
+/**
+ * Cap on blocks processed per tick. Keeps reorg checks frequent on long
+ * backlogs (e.g. after an outage) and bounds per-tick DB work.
+ */
+const MAX_BLOCKS_PER_TICK = 500n;
 
 export interface ContractBinding {
     name: string;
@@ -97,11 +105,12 @@ export class ChainWatcher {
                         this.chain.startBlock > 0n
                             ? this.chain.startBlock - 1n
                             : 0n,
-                    lastBlockHash: ("0x" + "00".repeat(32)) as `0x${string}`,
+                    lastBlockHash: `0x${"00".repeat(32)}` as `0x${string}`,
                 };
             } else {
                 const fork = await findForkPoint(
                     this.client,
+                    pgClient,
                     cursor,
                     this.chain.finalityDepth,
                 );
@@ -130,8 +139,10 @@ export class ChainWatcher {
             const from = cursor.lastBlock + 1n;
             if (from > finalized) return;
 
-            // Cap per-tick range so a long backlog doesn't block reorg checks.
-            const to = finalized - from > 500n ? from + 500n - 1n : finalized;
+            const to =
+                finalized - from > MAX_BLOCKS_PER_TICK
+                    ? from + MAX_BLOCKS_PER_TICK - 1n
+                    : finalized;
 
             await this.processRange(pgClient, from, to);
             cursorBlock.labels(String(this.chain.id)).set(Number(to));
@@ -147,68 +158,86 @@ export class ChainWatcher {
         }
     }
 
+    /**
+     * Process blocks [from, to] one at a time. For each block we:
+     *   1. Collect every log across all bound contracts at that block number.
+     *   2. Fetch the block header once.
+     *   3. In a single pg tx: dispatch logs, upsert cursor, record the block
+     *      hash in recent_block_hashes, prune old entries.
+     *
+     * Block-by-block iteration (rather than contract-outer / block-inner)
+     * guarantees cursor + entity rows + recent_block_hashes advance atomically
+     * for a single block. reorg-detector depends on that invariant.
+     */
     private async processRange(
         pgClient: import("pg").PoolClient,
         from: bigint,
         to: bigint,
     ): Promise<void> {
-        // Batch getLogs by our registered contracts. The dispatcher routes
-        // by (contractName, topic0) so we tag each log with its contract here.
-        for (const contract of this.contracts) {
-            const logs = await this.client.getLogs({
-                address: contract.address,
-                fromBlock: from,
-                toBlock: to,
-            });
-            // Group by block so we can write one tx per block.
-            const byBlock = new Map<
-                bigint,
-                { hash: `0x${string}`; logs: typeof logs }
-            >();
-            for (const l of logs) {
-                if (l.blockNumber === null || l.blockHash === null) continue;
-                const existing = byBlock.get(l.blockNumber);
-                if (existing) {
-                    existing.logs.push(l);
-                } else {
-                    byBlock.set(l.blockNumber, {
-                        hash: l.blockHash,
-                        logs: [l],
+        const pruneCutoff = BigInt(this.chain.finalityDepth) * 2n;
+        for (let blockNumber = from; blockNumber <= to; blockNumber++) {
+            const logsByContract: {
+                contractName: string;
+                logs: Log[];
+            }[] = [];
+            for (const contract of this.contracts) {
+                const logs = await this.client.getLogs({
+                    address: contract.address,
+                    fromBlock: blockNumber,
+                    toBlock: blockNumber,
+                });
+                if (logs.length > 0) {
+                    logsByContract.push({
+                        contractName: contract.name,
+                        logs,
                     });
                 }
             }
 
-            for (const [blockNumber, { hash, logs: blockLogs }] of byBlock) {
-                await pgClient.query("BEGIN");
-                try {
-                    for (const log of blockLogs) {
+            const block = await this.client.getBlock({ blockNumber });
+            if (!block.hash) {
+                throw new Error(
+                    `chain ${this.chain.id} block ${blockNumber} returned no hash`,
+                );
+            }
+            const blockHash = block.hash;
+
+            await pgClient.query("BEGIN");
+            try {
+                for (const { contractName, logs } of logsByContract) {
+                    for (const log of logs) {
                         await this.dispatcher.dispatch(
                             pgClient,
                             this.chain,
                             log,
-                            contract.name,
+                            contractName,
                         );
                     }
-                    await upsertCursor(pgClient, {
-                        chainId: this.chain.id,
-                        lastBlock: blockNumber,
-                        lastBlockHash: hash,
-                    });
-                    await pgClient.query("COMMIT");
-                } catch (err) {
-                    await pgClient.query("ROLLBACK");
-                    throw err;
                 }
+                await upsertCursor(pgClient, {
+                    chainId: this.chain.id,
+                    lastBlock: blockNumber,
+                    lastBlockHash: blockHash,
+                });
+                await recordBlockHash(
+                    pgClient,
+                    this.chain.id,
+                    blockNumber,
+                    blockHash,
+                );
+                if (blockNumber > pruneCutoff) {
+                    await pruneRecentHashes(
+                        pgClient,
+                        this.chain.id,
+                        blockNumber - pruneCutoff,
+                    );
+                }
+                await pgClient.query("COMMIT");
+            } catch (err) {
+                await pgClient.query("ROLLBACK");
+                throw err;
             }
         }
-
-        // Advance cursor to `to` even if no logs matched, so we don't re-scan.
-        await upsertCursor(pgClient, {
-            chainId: this.chain.id,
-            lastBlock: to,
-            lastBlockHash: (await this.client.getBlock({ blockNumber: to }))
-                .hash as `0x${string}`,
-        });
     }
 }
 
