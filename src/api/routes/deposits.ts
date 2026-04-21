@@ -17,36 +17,38 @@ export async function registerDepositsRoutes(
     app: FastifyInstance,
     pool: Pool,
 ): Promise<void> {
-    app.get("/deposits/:user", async (req, reply) => {
-        const parsed = z.object({ user: addressParam }).safeParse(req.params);
-        if (!parsed.success) return reply.code(400).send({ error: "bad user" });
-        const res = await pool.query(
-            `SELECT deposit_id, source_chain, asset, amount, custody_type,
-                    state, initiated_at, credited_at, bridged_at
-               FROM cross_chain_deposit
-              WHERE user_address = $1
-              ORDER BY initiated_at DESC`,
-            [hexToBytea(parsed.data.user)],
-        );
-        return { deposits: res.rows.map(serialize) };
-    });
-
-    app.get("/deposits/:depositId", async (req, reply) => {
-        const parsed = z
-            .object({ depositId: depositIdParam })
-            .safeParse(req.params);
-        if (!parsed.success)
-            return reply.code(400).send({ error: "bad deposit id" });
-        const res = await pool.query(
-            `SELECT deposit_id, source_chain, asset, amount, custody_type,
-                    state, initiated_at, credited_at, bridged_at
-               FROM cross_chain_deposit
-              WHERE deposit_id = $1`,
-            [hexToBytea(parsed.data.depositId)],
-        );
-        const row = res.rows[0];
-        if (!row) return reply.code(404).send({ error: "not found" });
-        return serialize(row);
+    // Single route dispatches by param shape: 40-hex = user address, 64-hex = deposit id.
+    // Two routes would collide because Fastify ignores the param name when matching.
+    app.get("/deposits/:id", async (req, reply) => {
+        const raw = (req.params as { id?: string }).id ?? "";
+        const asAddress = addressParam.safeParse(raw);
+        if (asAddress.success) {
+            const res = await pool.query(
+                `SELECT deposit_id, source_chain, asset, amount, custody_type,
+                        state, initiated_at, credited_at, bridged_at
+                   FROM cross_chain_deposit
+                  WHERE user_address = $1
+                  ORDER BY initiated_at DESC`,
+                [hexToBytea(asAddress.data)],
+            );
+            return { deposits: res.rows.map(serialize) };
+        }
+        const asDepositId = depositIdParam.safeParse(raw);
+        if (asDepositId.success) {
+            const res = await pool.query(
+                `SELECT deposit_id, source_chain, asset, amount, custody_type,
+                        state, initiated_at, credited_at, bridged_at
+                   FROM cross_chain_deposit
+                  WHERE deposit_id = $1`,
+                [hexToBytea(asDepositId.data)],
+            );
+            const row = res.rows[0];
+            if (!row) return reply.code(404).send({ error: "not found" });
+            return serialize(row);
+        }
+        return reply
+            .code(400)
+            .send({ error: "expected 20-byte address or 32-byte deposit id" });
     });
 }
 

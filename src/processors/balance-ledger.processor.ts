@@ -20,18 +20,22 @@ const ABI = [
         type: "event",
         name: "Credited",
         inputs: [
+            { name: "writer", type: "address", indexed: true },
             { name: "user", type: "address", indexed: true },
             { name: "asset", type: "address", indexed: true },
             { name: "amount", type: "uint256", indexed: false },
+            { name: "newAvailable", type: "uint256", indexed: false },
         ],
     },
     {
         type: "event",
         name: "Debited",
         inputs: [
+            { name: "writer", type: "address", indexed: true },
             { name: "user", type: "address", indexed: true },
             { name: "asset", type: "address", indexed: true },
             { name: "amount", type: "uint256", indexed: false },
+            { name: "newAvailable", type: "uint256", indexed: false },
         ],
     },
     {
@@ -51,8 +55,12 @@ function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
 }
 
-const TOPIC_CREDITED = topicFor("Credited(address,address,uint256)");
-const TOPIC_DEBITED = topicFor("Debited(address,address,uint256)");
+const TOPIC_CREDITED = topicFor(
+    "Credited(address,address,address,uint256,uint256)",
+);
+const TOPIC_DEBITED = topicFor(
+    "Debited(address,address,address,uint256,uint256)",
+);
 const TOPIC_COLLATERAL_FLAG_SET = topicFor(
     "CollateralFlagSet(address,address,address,bool,uint64)",
 );

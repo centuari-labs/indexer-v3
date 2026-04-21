@@ -1,6 +1,6 @@
 # CLAUDE.md — indexer-v3 (Custom Blockchain Indexer)
 
-> **Status:** scaffold only. The directory currently contains `.git` and this file. Module 8 of the Phase 1 plan (`smart-contract-revamp/docs/phase-1-cross-chain-balance-ledger.md`) builds everything described here from scratch. Ponder was explicitly rejected — do not reach for it.
+> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, four migrations, Fastify REST, shared `apply-on-chain-effect` all live. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
 
 ## Stack
 
