@@ -10,10 +10,6 @@
         ".": {
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
-        },
-        "./shared/apply-on-chain-effect": {
-            "types": "./dist/shared/apply-on-chain-effect.d.ts",
-            "default": "./dist/shared/apply-on-chain-effect.js"
         }
     },
     "scripts": {
@@ -29,6 +25,7 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
+        "@centuari-labs/on-chain-effects": "^0.1.0",
         "@fastify/cors": "^10.0.1",
         "fastify": "^5.1.0",
         "pg": "^8.13.1",

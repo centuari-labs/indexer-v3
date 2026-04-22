@@ -4,6 +4,8 @@
 **Source of truth:** `smart-contract-revamp/docs/phase-1-cross-chain-balance-ledger.md` Module 8 (lines 733–900) and `smart-contract-revamp/docs/collateral-loophole-fix-plan.md` P4/P5.
 **Repo:** `indexer-v3/` (created, empty except `.git/`).
 
+> **UPDATE 2026-04-22 — C10 helper extracted to external package.** The `applyOnChainEffect` primitive has been moved out of `indexer-v3/src/shared/` and published as the private npm package [`@centuari-labs/on-chain-effects`](https://github.com/centuari-labs/on-chain-effects) on GitHub Packages. Consumers (indexer-v3, backend-v2, settlement-engine, sweeper-bot) now import `from "@centuari-labs/on-chain-effects"` — **not** `from "@centuari/indexer-v3/shared/apply-on-chain-effect"`. Consequently, Step 1's `./shared/apply-on-chain-effect` subpath export is obsolete, Step 9's workspace-boundary check no longer applies, and the umbrella `pnpm-workspace.yaml` from Prerequisite 2 is slated for removal in Phase E of the package-extraction migration (`~/.claude/plans/yes-help-me-create-enumerated-lightning.md`). The body below is preserved as a historical record of what was built.
+
 ## Context
 
 M8 is the custom Node.js/TypeScript indexer that replaces the legacy Ponder-based `indexer-v2`. It tails on-chain events from the Arbitrum hub and 4 spokes (Base, Ethereum, BNB, Polygon) and is the canonical read source for every other service. It also ships the shared `applyOnChainEffect` C10 idempotency helper that backend-v2, settlement-engine, and sweeper-bot (M7) import.

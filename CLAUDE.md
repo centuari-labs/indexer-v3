@@ -1,6 +1,6 @@
 # CLAUDE.md — indexer-v3 (Custom Blockchain Indexer)
 
-> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, four migrations, Fastify REST, shared `apply-on-chain-effect` all live. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
+> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, four migrations, Fastify REST, external `@centuari-labs/on-chain-effects` package integrated. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
 
 ## Stack
 
@@ -44,8 +44,6 @@ indexer-v3/
 │   ├── chain/
 │   │   ├── chain-watcher.ts     # one ChainWatcher per chain; takes chain config + list of (contract, processor) pairs
 │   │   └── reorg-detector.ts    # block-hash comparison (N=12 Arbitrum, N=64 Ethereum, N=32 others)
-│   ├── shared/
-│   │   └── apply-on-chain-effect.ts  # C10 idempotency helper — EXPORTED for re-use by backend-v2, settlement-engine, sweeper-bot
 │   ├── processors/
 │   │   ├── balance-ledger.processor.ts       # Credited / Debited / CollateralFlagSet → user_balance
 │   │   ├── centuari.processor.ts             # Order / Match / Repay / Bond mint events
@@ -86,9 +84,9 @@ indexer-v3/
 - N per chain: **12 (Arbitrum)**, **64 (Ethereum)**, **32 (others)** — configurable in `config.ts`.
 - Eager-path rows (created by backend-v2 / settlement-engine via `applyOnChainEffect`) are evicted by the same mechanism because they carry `applied_by_block_hash` + `applied_by_block_number`.
 
-### C10 Idempotency — `apply-on-chain-effect.ts`
+### C10 Idempotency — `@centuari-labs/on-chain-effects`
 
-This is the single source of truth for the "verify-then-apply" invariant. Exported so that `backend-v2`, `settlement-engine`, and the Phase 1 sweeper-bot can import it and share the idempotency stamps with the indexer.
+The single source of truth for the "verify-then-apply" invariant lives in the external private npm package `@centuari-labs/on-chain-effects` (published via GitHub Packages under the `centuari-labs` org). `indexer-v3` processors, `backend-v2`, `settlement-engine`, and the Phase 1 sweeper-bot all depend on the same published version, so every eager-path writer and the indexer tail run byte-identical stamp logic.
 
 Signature (sketch):
 
@@ -163,7 +161,7 @@ Fastify, JSON only, port `42069`. No GraphQL.
 6. **Pino structured logs** to stdout. Never `console.log`.
 7. **Custom errors over string messages** — define small `class X extends Error` types per processor.
 8. **Strict TypeScript** — `"strict": true`, `"noUncheckedIndexedAccess": true`.
-9. **No cross-service imports.** Services consume indexer-v3 via REST. The only exported symbol for re-use is `apply-on-chain-effect.ts` (imported by backend-v2 / settlement-engine / sweeper-bot).
+9. **No cross-service imports.** Services consume indexer-v3 via REST. The C10 idempotency helper is distributed as the external npm package `@centuari-labs/on-chain-effects` (GitHub Packages) and pulled in directly by backend-v2 / settlement-engine / sweeper-bot — no `@centuari/indexer-v3` imports anywhere.
 10. **Constants only, no magic.** Chain IDs, reorg depths, block polling intervals — all named constants in `config.ts`.
 
 ## Configuration
