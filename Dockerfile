@@ -1,36 +1,35 @@
+# syntax=docker/dockerfile:1.7
 # ---------- builder ----------
 FROM node:22-alpine AS builder
 
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
-WORKDIR /repo
+WORKDIR /app
 
-# Copy the workspace manifest + every service's package.json so pnpm can
-# compute the dep graph. The COPY globs below assume the build context is
-# the repo root (see docker-compose context: .).
-COPY pnpm-workspace.yaml package.json* pnpm-lock.yaml* ./
-COPY indexer-v3/package.json ./indexer-v3/
-COPY backend-v2/package.json ./backend-v2/
-COPY settlement-engine/package.json ./settlement-engine/
-COPY matching-engine/package.json ./matching-engine/
-COPY frontend-revamp/package.json ./frontend-revamp/
+# .npmrc holds the @centuari-labs scope -> GitHub Packages mapping (no token).
+# Auth token is provided at install time via BuildKit secret mount.
+COPY package.json pnpm-lock.yaml .npmrc ./
 
-RUN pnpm install --frozen-lockfile --filter @centuari/indexer-v3...
+RUN --mount=type=secret,id=npmrc,dst=/root/.npmrc \
+    pnpm install --frozen-lockfile
 
-COPY indexer-v3 ./indexer-v3
+COPY . .
 
-WORKDIR /repo/indexer-v3
 RUN pnpm run build
-
-# Produce a deployable tree containing only the indexer and its deps.
-RUN pnpm deploy --filter @centuari/indexer-v3 --prod /prod-out
 
 # ---------- production ----------
 FROM node:22-alpine AS production
 
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
 WORKDIR /app
 
-COPY --from=builder /prod-out ./
+COPY package.json pnpm-lock.yaml .npmrc ./
+
+RUN --mount=type=secret,id=npmrc,dst=/root/.npmrc \
+    pnpm install --prod --frozen-lockfile
+
+COPY --from=builder /app/dist ./dist
 
 ENV NODE_ENV=production
 ENV TZ=UTC
