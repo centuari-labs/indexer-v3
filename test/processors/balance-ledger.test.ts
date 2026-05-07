@@ -241,4 +241,132 @@ describe("balance-ledger processor", () => {
             fake.filterBySqlContains("INSERT INTO user_balance"),
         ).toHaveLength(0);
     });
+
+    // ─── Phase 4: tail-path queue cleanup ─────────────────────────────────
+    //
+    // Every CollateralFlagSet that the tail processes must DELETE the
+    // corresponding `pending_collateral_flags` row. This covers
+    // direct-caller flag/unflag (msg.sender → CollateralManager.flag(asset))
+    // and any eager-path crashes that stamped state but skipped the DELETE.
+
+    test("CollateralFlagSet (used=true) DELETEs the matching pending_collateral_flags row in the same per-block tx", async () => {
+        const fake = new FakePoolClient();
+        stageNotYetStamped(fake);
+
+        await collateralFlagSet.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: COLLATERAL_FLAG_SET_EVENT,
+                args: {
+                    writer: WRITER,
+                    user: USER,
+                    asset: ASSET,
+                    used: true,
+                    flaggedAt: 1_700_000_000n,
+                },
+            }),
+        });
+
+        const del = fake.findBySqlContains(
+            "DELETE FROM pending_collateral_flags",
+        );
+        expect(del).toBeDefined();
+        expect(del!.params[0]).toEqual(hexToBytea(USER));
+        expect(del!.params[1]).toEqual(hexToBytea(ASSET));
+
+        // Order matters: idempotency SELECT → user_balance INSERT → queue
+        // DELETE. If the DELETE fired before the upsert and the upsert
+        // failed mid-batch, the queue row would be lost without the
+        // on-chain state ever landing.
+        const sqlOrder = fake.recorded.map((r) => r.sql);
+        const selectIdx = sqlOrder.findIndex((s) => s.includes("SELECT count"));
+        const upsertIdx = sqlOrder.findIndex((s) =>
+            s.includes("INSERT INTO user_balance"),
+        );
+        const deleteIdx = sqlOrder.findIndex((s) =>
+            s.includes("DELETE FROM pending_collateral_flags"),
+        );
+        expect(selectIdx).toBeLessThan(upsertIdx);
+        expect(upsertIdx).toBeLessThan(deleteIdx);
+    });
+
+    test("CollateralFlagSet (used=false) also DELETEs — defensive against unflag emissions slipping into a settle receipt", async () => {
+        const fake = new FakePoolClient();
+        stageNotYetStamped(fake);
+
+        await collateralFlagSet.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: COLLATERAL_FLAG_SET_EVENT,
+                args: {
+                    writer: WRITER,
+                    user: USER,
+                    asset: ASSET,
+                    used: false,
+                    flaggedAt: 0n,
+                },
+            }),
+        });
+
+        expect(
+            fake.findBySqlContains("DELETE FROM pending_collateral_flags"),
+        ).toBeDefined();
+    });
+
+    test("CollateralFlagSet skips the DELETE when already stamped (preserves any concurrent queue writes — already-stamped means a peer writer handled this event)", async () => {
+        const fake = new FakePoolClient();
+        stageAlreadyStamped(fake);
+
+        await collateralFlagSet.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: COLLATERAL_FLAG_SET_EVENT,
+                args: {
+                    writer: WRITER,
+                    user: USER,
+                    asset: ASSET,
+                    used: true,
+                    flaggedAt: 1n,
+                },
+            }),
+        });
+
+        // Idempotency check fires; nothing else.
+        expect(
+            fake.filterBySqlContains("DELETE FROM pending_collateral_flags"),
+        ).toHaveLength(0);
+        expect(
+            fake.filterBySqlContains("INSERT INTO user_balance"),
+        ).toHaveLength(0);
+    });
+
+    test("CollateralFlagSet DELETE is idempotent — pg returns rowCount=0 when no queue row exists, handler does not error", async () => {
+        // The fake client's default response is empty (rowCount=0). Since the
+        // production DELETE WHERE returns 0 rows when nothing matches and pg
+        // doesn't throw, the handler completes without error even when the
+        // peer writer (settlement-engine eager or backend dequeue) already
+        // removed the row.
+        const fake = new FakePoolClient();
+        stageNotYetStamped(fake);
+
+        await expect(
+            collateralFlagSet.handle({
+                client: asPoolClient(fake),
+                chain: makeHubChain(),
+                log: makeLog({
+                    event: COLLATERAL_FLAG_SET_EVENT,
+                    args: {
+                        writer: WRITER,
+                        user: USER,
+                        asset: ASSET,
+                        used: true,
+                        flaggedAt: 1n,
+                    },
+                }),
+            }),
+        ).resolves.toBeUndefined();
+    });
 });

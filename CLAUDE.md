@@ -141,7 +141,7 @@ Fastify, JSON only, port `42069`. No GraphQL.
 | Event (source contract) | Processor | Mutation |
 |---|---|---|
 | `BalanceLedger.Credited / Debited` | balance-ledger | `user_balance.available += / -=` |
-| `BalanceLedger.CollateralFlagSet(writer, user, asset, used, flaggedAt)` | balance-ledger | `user_balance.used_as_collateral` + `flagged_at` |
+| `BalanceLedger.CollateralFlagSet(writer, user, asset, used, flaggedAt)` | balance-ledger | `user_balance.used_as_collateral` + `flagged_at`; also DELETEs the matching `pending_collateral_flags` row (Phase 4 tail-path queue cleanup — idempotent peer writer alongside backend-v2 dequeue and settlement-engine eager DELETE) |
 | `Centuari.*` (Order / Match / Repay / Bond mint) | centuari | position + bond rows. Repay auto-unflag surfaces via `CollateralFlagSet` — not touched here directly. |
 | `HubDepositor.Deposit / Payout` | hub-depositor | `deposit_event` row; balance change comes from `BalanceLedger.Credited/Debited` |
 | `HubIntentSettler.DepositConfirmed` | hub-intent-settler | `cross_chain_deposit.state = CREDITED`, `credited_at = now` |
@@ -150,6 +150,16 @@ Fastify, JSON only, port `42069`. No GraphQL.
 | `SettlementLedger.*` | settlement-ledger | **dormant processor** — keep stub; no events expected |
 | `SpokeDepositGateway.DepositInitiated` | spoke-deposit-gateway | seed `cross_chain_deposit (state=INITIATED, custody_type=BRIDGED\|SPOKE_NATIVE)` |
 | `SpokeVaultStable.*` | spoke-vault | spoke custody accounting |
+
+## Cross-service tables
+
+The Postgres database is shared with backend-v2, settlement-engine, and the matching-engine's db-writer. Most tables are owned by indexer-v3 (the shared on-chain-state schema in `migrations/001_init.sql`). One Phase 1 table is owned cross-service:
+
+| Table | Migration owner | Writers | Notes |
+|---|---|---|---|
+| `pending_collateral_flags` | backend-v2 (`20260506120000_add_pending_collateral_flags.sql`) | backend-v2 INSERT/DELETE; settlement-engine DELETE; indexer-v3 (this service) DELETE | Pre-settlement intent buffer for collateral flags. The user toggles via `POST /collateral/flag` (backend INSERTs); backend dequeues on `POST /collateral/unflag` if the asset is still queue-only; settlement-engine eager-DELETEs on the receipt of its own `Settlement.settleMatches` tx; this indexer DELETEs in `balance-ledger.processor.ts.handleCollateralFlagSet` for every observed `CollateralFlagSet` (covers direct-caller `CollateralManager.flag(asset)` events and any eager-path crashes). All four DELETE paths are idempotent — `DELETE WHERE` is naturally a no-op on a missing row. |
+
+Future consolidation: move the migration into indexer-v3's runner so the schema home matches the cross-service write surface. Deferred — it would require coordinating downtime across all consuming services, and the current setup works.
 
 ## Code Standards
 

@@ -229,6 +229,40 @@ async function handleCollateralFlagSet(ctx: ProcessorContext): Promise<void> {
             ctx.log.blockNumber.toString(),
         ],
     );
+
+    // Phase 4 tail-path queue cleanup. The shared `pending_collateral_flags`
+    // table is the user's pre-settlement intent buffer; once the on-chain
+    // event lands the queue row is meaningless and must be removed so future
+    // borrow orders don't re-encode this asset. This DELETE rides on the
+    // same per-block transaction as the user_balance upsert above.
+    //
+    // Three writers can DELETE this row:
+    //   1. backend-v2 on `POST /collateral/unflag` while the asset is still
+    //      queue-only (Phase 2 dequeue branch — user explicitly takes back
+    //      their pending intent before any tx fires).
+    //   2. settlement-engine eager path on receipt success (Phase 3 —
+    //      parses CollateralFlagSet logs from its own settleMatches receipt).
+    //   3. THIS processor (Phase 4 tail) — covers direct-caller events
+    //      (`CollateralManager.flag(asset)` / `unflag(asset)` from msg.sender)
+    //      that the eager path never sees, plus any eager-path crashes that
+    //      stamped state but missed the DELETE.
+    //
+    // DELETE WHERE is naturally idempotent: a row already removed by a
+    // peer writer is a no-op (rowCount=0, no error). We do not gate this
+    // on `args.used` — defensively clean up on `used=false` events too,
+    // which never appear in a settle-driven receipt today (Centuari only
+    // emits used=true at settlement) but cost nothing to handle and
+    // future-proof against unflag emissions slipping into the same tx.
+    //
+    // Cross-service note: the migration for this table lives in backend-v2
+    // (`20260506120000_add_pending_collateral_flags.sql`) but the same
+    // Postgres database is shared across services. See indexer-v3 CLAUDE.md
+    // "Cross-service tables".
+    await ctx.client.query(
+        `DELETE FROM pending_collateral_flags
+          WHERE user_address = $1 AND asset = $2`,
+        [hexToBytea(args.user), hexToBytea(args.asset)],
+    );
 }
 
 export const balanceLedgerProcessors: EventProcessor[] = [
