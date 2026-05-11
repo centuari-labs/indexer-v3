@@ -8,7 +8,7 @@ const addressParam = z
     .regex(/^0x[a-fA-F0-9]{40}$/u)
     .transform((v) => v.toLowerCase() as `0x${string}`);
 
-const FLAG_LOCK_SECONDS = 24 * 60 * 60;
+export const FLAG_LOCK_SECONDS = 24 * 60 * 60;
 
 export async function registerCollateralRoutes(
     app: FastifyInstance,

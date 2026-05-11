@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { byteaToHex, hexToBytea } from "../../db/bytea.js";
+import { FLAG_LOCK_SECONDS } from "./collateral.js";
 
 const addressParam = z
     .string()
@@ -24,11 +25,19 @@ export async function registerPortfolioRoutes(
             borrowPositions,
             lendPositions,
         ] = await Promise.all([
+            // LEFT JOIN pending_collateral_flags so the frontend can render the
+            // three-state badge (none / pending / onchain) without a second
+            // round trip. The join is by (user, asset) — matches the table's
+            // UNIQUE (user_address, asset) constraint, so at most one row hits.
             pool.query(
-                `SELECT user_address, asset, available, in_orders, in_yield_router,
-                        used_as_collateral, flagged_at
-                   FROM user_balance
-                  WHERE user_address = $1`,
+                `SELECT b.user_address, b.asset, b.available, b.in_orders,
+                        b.in_yield_router, b.used_as_collateral, b.flagged_at,
+                        (p.user_address IS NOT NULL) AS pending_collateral_flag
+                   FROM user_balance b
+                   LEFT JOIN pending_collateral_flags p
+                          ON p.user_address = b.user_address
+                         AND p.asset = b.asset
+                  WHERE b.user_address = $1`,
                 [user],
             ),
             pool.query(
@@ -63,14 +72,29 @@ export async function registerPortfolioRoutes(
 
         return {
             user: parsed.data.user,
-            balances: balances.rows.map((r) => ({
-                asset: byteaToHex(r.asset),
-                available: r.available,
-                inOrders: r.in_orders,
-                inYieldRouter: r.in_yield_router,
-                usedAsCollateral: r.used_as_collateral,
-                flaggedAt: Number(r.flagged_at),
-            })),
+            balances: balances.rows.map((r) => {
+                const flaggedAt = Number(r.flagged_at);
+                const usedAsCollateral = r.used_as_collateral as boolean;
+                // `unlocksAt` matches the convention used by /collateral/:user/:asset:
+                // 0 when the asset isn't on-chain flagged, else flaggedAt + 24h.
+                // Frontend derives the badge state from (usedAsCollateral,
+                // pendingCollateralFlag) and only reads flaggedAt / unlocksAt
+                // for the `onchain` variant.
+                const unlocksAt =
+                    usedAsCollateral && flaggedAt > 0
+                        ? flaggedAt + FLAG_LOCK_SECONDS
+                        : 0;
+                return {
+                    asset: byteaToHex(r.asset),
+                    available: r.available,
+                    inOrders: r.in_orders,
+                    inYieldRouter: r.in_yield_router,
+                    usedAsCollateral,
+                    flaggedAt,
+                    unlocksAt,
+                    pendingCollateralFlag: r.pending_collateral_flag as boolean,
+                };
+            }),
             openWithdrawals: openWithdrawals.rows.map((r) => ({
                 requestId: byteaToHex(r.request_id),
                 asset: byteaToHex(r.asset),
