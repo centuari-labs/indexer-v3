@@ -1,6 +1,6 @@
 # CLAUDE.md — indexer-v3 (Custom Blockchain Indexer)
 
-> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, four migrations, Fastify REST, external `@centuari-labs/on-chain-effects` package integrated. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
+> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, four migrations, Fastify ops surface (`/health` + `/metrics` only — data routes removed 2026-05-12), external `@centuari-labs/on-chain-effects` package integrated. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
 
 ## Stack
 
@@ -54,14 +54,9 @@ indexer-v3/
 │   │   ├── spoke-deposit-gateway.processor.ts # DepositInitiated on spoke → seeds cross_chain_deposit rows
 │   │   └── spoke-vault.processor.ts          # spoke custody events
 │   ├── api/
-│   │   ├── server.ts            # Fastify bootstrap, Pino logger, /metrics (Prometheus)
+│   │   ├── server.ts            # Fastify bootstrap, /metrics (Prometheus)
 │   │   └── routes/
-│   │       ├── balance.ts       # GET /balance/:user, GET /balance/:user/:asset
-│   │       ├── collateral.ts    # GET /collateral/:user/:asset — READ-ONLY (no write endpoint)
-│   │       ├── withdrawals.ts   # GET /withdrawals/:user
-│   │       ├── deposits.ts      # GET /deposits/:user, GET /deposits/:depositId
-│   │       ├── portfolio.ts     # GET /portfolio/:user — aggregates balance + open withdrawals + in-flight deposits
-│   │       └── health.ts        # GET /health — per-chain cursor lag
+│   │       └── health.ts        # GET /health — per-chain cursor lag (ops only)
 │   └── abi/                     # generated TS ABI constants (produced by `pnpm run copy-abi`)
 ├── biome.json                   # copy from backend-v2
 ├── tsconfig.json                # strict, nodenext, ES2022
@@ -123,18 +118,18 @@ All timestamp columns are `TIMESTAMPTZ`. Addresses and hashes stored as `BYTEA`.
 
 ## REST API Surface
 
-Fastify, JSON only, port `42069`. No GraphQL.
+Fastify, JSON only, port `42069`. **Ops surface only** — no consumer-facing data API.
 
 | Route | Consumer | Purpose |
 |---|---|---|
-| `GET /balance/:user` | frontend, backend | All balances across assets |
-| `GET /balance/:user/:asset` | matching-engine (hot path) | Single `available` lookup (sub-ms, same docker network) |
-| `GET /collateral/:user/:asset` | backend, frontend | `{ used, flaggedAt, unlocksAt }`. **READ-ONLY.** There is no write endpoint — flag mutations happen on-chain only. |
-| `GET /withdrawals/:user` | backend, frontend | Withdrawal request list |
-| `GET /deposits/:user` · `GET /deposits/:depositId` | backend, frontend | Cross-chain deposit tracking |
-| `GET /portfolio/:user` | frontend | One-call aggregate: balances + open withdrawals + in-flight cross-chain deposits |
-| `GET /health` | ops, backend fallback logic | Per-chain cursor lag in seconds |
+| `GET /health` | docker healthcheck, ops | Per-chain cursor lag in seconds |
 | `GET /metrics` | Prometheus | `indexer_block_lag_seconds{chain_id}`, `indexer_events_processed_total{chain_id,contract}`, `indexer_reorg_depth{chain_id}` |
+
+**Reads:** No consumer-facing data API exists. Backend-v2, matching-engine, and every other reader queries the shared Postgres schema (`user_balance`, `withdrawal_request`, `cross_chain_deposit`, `deposit_event`, etc.) directly via its own DB pool. Frontend only calls backend-v2 — never indexer-v3.
+
+**Writes:** The indexer's only writes are via its own processors (event-tail safety net) and via `@centuari-labs/on-chain-effects` called from eager-path services (backend-v2, settlement-engine, sweeper-bot). The indexer exposes no HTTP write endpoints.
+
+**Historical note:** A consumer-facing data API (`/balance`, `/collateral`, `/portfolio`, `/deposits`, `/withdrawals`, `/positions`) was scoped in Phase 1 docs but never wired up by any consumer. Removed 2026-05-12.
 
 ## Event → Entity Map (Phase 1 active)
 
@@ -171,7 +166,7 @@ Future consolidation: move the migration into indexer-v3's runner so the schema 
 6. **Pino structured logs** to stdout. Never `console.log`.
 7. **Custom errors over string messages** — define small `class X extends Error` types per processor.
 8. **Strict TypeScript** — `"strict": true`, `"noUncheckedIndexedAccess": true`.
-9. **No cross-service imports.** Services consume indexer-v3 via REST. The C10 idempotency helper is distributed as the external npm package `@centuari-labs/on-chain-effects` (GitHub Packages) and pulled in directly by backend-v2 / settlement-engine / sweeper-bot — no `@centuari/indexer-v3` imports anywhere.
+9. **No cross-service imports.** Services consume indexer-v3 state by reading the shared Postgres schema directly via their own DB pools — not via HTTP (the indexer exposes only `/health` + `/metrics`). The C10 idempotency helper is distributed as the external npm package `@centuari-labs/on-chain-effects` (GitHub Packages) and pulled in directly by backend-v2 / settlement-engine / sweeper-bot — no `@centuari/indexer-v3` imports anywhere.
 10. **Constants only, no magic.** Chain IDs, reorg depths, block polling intervals — all named constants in `config.ts`.
 
 ## Configuration
@@ -194,16 +189,17 @@ All addresses come from `smart-contract-revamp/deployments/deploy-<network>-late
 
 - **Unit** (jest): decode an event fixture, assert the DB mutation against an ephemeral Postgres (testcontainers) or `pg-mem`.
 - **Reorg replay**: seed blocks 100–110, replay 105–112 with different hashes, assert rows ≥106 deleted and replaced.
-- **Integration**: Anvil on a single chain; deploy `BalanceLedger`; run watcher; trigger `credit`; assert `GET /balance/:user/:asset` reflects within 2s.
+- **Integration**: Anvil on a single chain; deploy `BalanceLedger`; run watcher; trigger `credit`; assert the `user_balance` row in Postgres reflects within 2s (direct DB SELECT, not HTTP).
 - **Idempotency**: call `applyOnChainEffect` twice with the same tx hash → second call is no-op, row unchanged.
 
 ## Verification (Module 8 exit criteria)
 
 - `pnpm run dev` boots, runs migrations, connects to all five chains, begins tailing.
 - `curl localhost:42069/health` reports per-chain block-lag under 10s on testnet.
-- Trigger a deposit via `HubDepositor.deposit` on Arbitrum Sepolia → `GET /balance/0x<user>/0x<asset>` shows updated `available` within 2 seconds.
-- Trigger a cross-chain deposit via `SpokeDepositGateway.deposit` on Base Sepolia → `GET /deposits/<depositId>` walks through `INITIATED → CREDITED → BRIDGED`.
-- `CollateralFlagSet` from `Centuari.settleMatch()` reflects in `GET /collateral/:user/:asset` within 2s.
+- `curl localhost:42069/metrics` returns Prometheus output with `indexer_block_lag_seconds` per chain.
+- Trigger a deposit via `HubDepositor.deposit` on Arbitrum Sepolia → `SELECT available FROM user_balance WHERE user_address = $1 AND asset = $2` shows updated value within 2 seconds.
+- Trigger a cross-chain deposit via `SpokeDepositGateway.deposit` on Base Sepolia → `SELECT state FROM cross_chain_deposit WHERE deposit_id = $1` walks through `INITIATED → CREDITED → BRIDGED`.
+- `CollateralFlagSet` from `Centuari.settleMatch()` reflects in `SELECT used_as_collateral, flagged_at FROM user_balance WHERE user_address = $1 AND asset = $2` within 2s.
 
 ## Phase 1 Plan Reference
 

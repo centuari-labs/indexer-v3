@@ -6,9 +6,11 @@
 
 > **UPDATE 2026-04-22 — C10 helper extracted to external package.** The `applyOnChainEffect` primitive has been moved out of `indexer-v3/src/shared/` and published as the private npm package [`@centuari-labs/on-chain-effects`](https://github.com/centuari-labs/on-chain-effects) on GitHub Packages. Consumers (indexer-v3, backend-v2, settlement-engine, sweeper-bot) now import `from "@centuari-labs/on-chain-effects"` — **not** `from "@centuari/indexer-v3/shared/apply-on-chain-effect"`. Consequently, Step 1's `./shared/apply-on-chain-effect` subpath export is obsolete, Step 9's workspace-boundary check no longer applies, and the umbrella `pnpm-workspace.yaml` from Prerequisite 2 is slated for removal in Phase E of the package-extraction migration (`~/.claude/plans/yes-help-me-create-enumerated-lightning.md`). The body below is preserved as a historical record of what was built.
 
+> **UPDATE 2026-05-12 — consumer-facing data API removed.** indexer-v3 now exposes only `/health` and `/metrics` on port 42069. The original `/balance`, `/collateral`, `/portfolio`, `/deposits`, `/withdrawals`, `/positions` routes were never wired up by any consumer (matching-engine, backend, frontend, settlement-engine) — all read paths go directly against the shared Postgres schema. The indexer's role is now strictly (1) apply on-chain effects via `@centuari-labs/on-chain-effects` from its ChainWatchers, (2) backfill from chain history. Frontend continues to talk only to backend-v2. The route-table body below is preserved as historical record.
+
 ## Context
 
-M8 is the custom Node.js/TypeScript indexer that replaces the legacy Ponder-based `indexer-v2`. It tails on-chain events from the Arbitrum hub and 4 spokes (Base, Ethereum, BNB, Polygon) and is the canonical read source for every other service. It also ships the shared `applyOnChainEffect` C10 idempotency helper that backend-v2, settlement-engine, and sweeper-bot (M7) import.
+M8 is the custom Node.js/TypeScript indexer that replaces the legacy Ponder-based `indexer-v2`. It tails on-chain events from the Arbitrum hub and 4 spokes (Base, Ethereum, BNB, Polygon) and writes the canonical on-chain-state Postgres schema that every other service reads directly via its own DB pool. It also ships the shared `applyOnChainEffect` C10 idempotency helper that backend-v2, settlement-engine, and sweeper-bot (M7) import.
 
 M8 is unblocked (M1–M5 done). Starting M8 also lands **P5** (collateral event processor) and **P4** (backend flag/unflag endpoints) inside the same window, because both need the C10 helper and the event processor that only exist once M8 is live.
 
@@ -25,7 +27,7 @@ Two blockers must be resolved before Phase 1 implementation can begin.
 1. `indexer-v3` container runs on `docker-compose up -d` and reaches `GET /health` OK within 30s, with per-chain block-lag < 10s on testnet.
 2. All 10 event processors tail testnet and persist to Postgres with C10 idempotency stamps.
 3. `POST /collateral/flag` and `POST /collateral/unflag` in backend-v2 work end-to-end using indexer-v3's `applyOnChainEffect` helper (P4 + P5 acceptance).
-4. Matching engine reads `GET /balance/:user/:asset` successfully (retires the chain-RPC read path in M9).
+4. Matching engine reads `user_balance` directly from the shared Postgres schema (retires the chain-RPC read path in M9). No HTTP hop to indexer-v3.
 5. Reorg handling validated: forced reorg on Arbitrum Sepolia via test harness rolls back affected rows.
 
 ## Architecture
@@ -58,14 +60,9 @@ indexer-v3/
 │   │   ├── migrations/001_init.sql      # see schema below
 │   │   └── migrate.ts                   # sequential runner (pattern from matching-engine)
 │   ├── api/
-│   │   ├── server.ts                    # Fastify (per indexer-v3/CLAUDE.md)
+│   │   ├── server.ts                    # Fastify — /health + /metrics only (ops surface)
 │   │   └── routes/
-│   │       ├── balance.ts
-│   │       ├── portfolio.ts
-│   │       ├── collateral.ts
-│   │       ├── deposits.ts
-│   │       ├── withdrawals.ts
-│   │       └── health.ts
+│   │       └── health.ts                # GET /health — per-chain cursor lag
 │   └── observability/
 │       ├── logger.ts                    # Pino JSON to stdout
 │       └── metrics.ts                   # prom-client on /metrics
@@ -201,21 +198,16 @@ Consumers: backend-v2 (`/collateral/flag`, `/collateral/unflag`, deposits, withd
 
 ## REST API
 
-Fastify + Zod. JSON only. All reads protected by optional Privy JWT (authoritative list of who owns what goes through backend; indexer is read-only public portfolio data).
+Fastify, JSON only. **Ops surface only** — no consumer-facing data API. All other services read the shared Postgres schema directly via their own DB pools.
 
 | Method | Path | Consumer | Returns |
 |---|---|---|---|
-| GET | `/health` | docker, ops | `{ chains: [{chainId, blockLag, lastBlock}] }` |
-| GET | `/metrics` | prometheus | plain text |
-| GET | `/balance/:user` | matching-engine, backend | all assets, 3-state + collateral |
-| GET | `/balance/:user/:asset` | matching-engine (hot path) | single-asset 3-state + collateral |
-| GET | `/portfolio/:user` | frontend, backend | aggregated view incl. flagged assets + open withdrawals + in-flight deposits |
-| GET | `/collateral/:user/:asset` | backend `/collateral/unflag` guard | `{ used, flaggedAt, unlocksAt }` |
-| GET | `/deposits/:user` | frontend | list of cross-chain + hub-native deposits |
-| GET | `/deposits/:depositId` | frontend polling | single deposit state |
-| GET | `/withdrawals/:user` | frontend | withdrawal requests + states |
+| GET | `/health` | docker healthcheck, ops | `{ chains: [{chainId, blockLag, lastBlock}] }` |
+| GET | `/metrics` | prometheus | `indexer_block_lag_seconds{chain_id}`, `indexer_events_processed_total`, `indexer_reorg_depth` |
 
-Latency budget: matching-engine balance read must be sub-ms on the same docker network.
+Latency budget: consumers reading `user_balance` directly from the shared Postgres pool must complete sub-ms on the same docker network. The HTTP API exists only for ops/monitoring and is not on any hot path.
+
+**Historical note:** The original M8 design exposed `/balance`, `/collateral`, `/portfolio`, `/deposits`, `/withdrawals`, and `/positions` routes scoped for matching-engine/backend/frontend. None were ever consumed at runtime (consumers went direct to Postgres). The data routes were removed on 2026-05-12.
 
 ## Multi-chain + reorg handling
 
@@ -252,7 +244,7 @@ Each step ends with a green test run before moving on.
 7. **Event dispatcher + ABI loader** — decodes logs via viem, routes by event topic.
 8. **Processor: `balance-ledger.processor.ts`** — implement `Credited`, `Debited`, and **`CollateralFlagSet` (5-param)**. This is the P5 deliverable — test decoder against a live contract emit. Stamp `applied_by_*`.
 9. **`applyOnChainEffect` helper** — ship at `src/shared/apply-on-chain-effect.ts`; compiled output at `dist/shared/apply-on-chain-effect.{js,d.ts}`. Unit tests cover: success, tx reverted, event missing, predicate fails, duplicate-call skip. **Blocking before Step 10: verify the workspace package boundary.** In a scratch `packages/_boundary-check` workspace member (or a temporary sibling service): add `"@centuari/indexer-v3": "workspace:*"` to its `package.json`, run `pnpm install`, write a 10-line script importing `applyOnChainEffect` from `@centuari/indexer-v3/shared/apply-on-chain-effect`, run `tsc --noEmit` — must compile cleanly with full types. Then run `pnpm deploy --filter=_boundary-check --prod /tmp/out` and confirm `/tmp/out/node_modules/@centuari/indexer-v3/dist/shared/apply-on-chain-effect.js` is present. This proves the prod container shape (used by backend-v2 / settlement-engine / sweeper-bot Dockerfiles per phase-1 §C10.3) actually works end-to-end.
-10. **REST API: `/health`, `/balance`, `/collateral`, `/portfolio`** — Fastify routes + Zod response schemas. Integration test boots indexer + seeded Postgres and hits endpoints.
+10. **REST API: `/health` + `/metrics` only** — Fastify ops surface. Integration test boots indexer + asserts `/health` returns per-chain block lag and `/metrics` returns Prometheus output. No consumer-facing data routes — all reads go direct to Postgres.
 11. **Remaining processors** — centuari, hub-depositor, hub-intent-settler, withdrawal-registry, spoke-deposit-gateway, spoke-vault. settlement-ledger is decode-only stub (dormant Phase 1).
 12. **Multi-chain integration** — wire all 5 chains via env. Smoke-test against Arbitrum Sepolia + Base Sepolia using real RPC.
 13. **Docker-compose wiring** — update the existing `indexer-v2` service block in `docker-compose.yml` (lines 131–147) to `indexer-v3` + bump context + env path. Verify `docker-compose up -d` brings it up healthy.
@@ -278,9 +270,11 @@ Each step ends with a green test run before moving on.
 
 ## Verification
 
-- `pnpm test` — unit + integration green (reorg detector, processors, helper, API).
+- `pnpm test` — unit + integration green (reorg detector, processors, helper).
 - `docker-compose up -d` — `indexer-v3` healthy within 30s.
 - `curl http://localhost:42069/health` returns per-chain block lag.
+- `curl http://localhost:42069/metrics` returns Prometheus output.
+- `curl http://localhost:42069/balance/0xabc` returns 404 (no data API — confirms routes removed).
 - Forked-chain integration test drives a `CollateralFlagSet` emit and asserts the DB row matches (used + flagged_at + applied_by_*).
 - P4+P5 acceptance test from `collateral-loophole-fix-plan.md` §Verification step 3 passes against testnet.
 - **Package boundary proven:** scratch consumer from Step 9 compiles + `pnpm deploy` output contains the helper at the expected path.
