@@ -1,4 +1,14 @@
-import { type Address, type Hex, decodeEventLog, keccak256, toHex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import spokeVaultStableAbi from "../abi/SpokeVaultStable.json" with {
+    type: "json",
+};
 import type {
     EventProcessor,
     ProcessorContext,
@@ -17,45 +27,10 @@ const log = createLogger("spoke-vault");
  *   BridgedRecalled(asset, to, amount)         // BRIDGED custody out
  *   SpokeNativeDeposited(asset, from, amount)  // SPOKE_NATIVE custody in
  *   SpokeNativeReleased(asset, to, amount)     // SPOKE_NATIVE custody out
+ *
+ * Full ABI synced from smart-contract-revamp/abi/SpokeVaultStable.json.
  */
-const ABI = [
-    {
-        type: "event",
-        name: "BridgedDeposited",
-        inputs: [
-            { name: "asset", type: "address", indexed: true },
-            { name: "from", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "BridgedRecalled",
-        inputs: [
-            { name: "asset", type: "address", indexed: true },
-            { name: "to", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "SpokeNativeDeposited",
-        inputs: [
-            { name: "asset", type: "address", indexed: true },
-            { name: "from", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "SpokeNativeReleased",
-        inputs: [
-            { name: "asset", type: "address", indexed: true },
-            { name: "to", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-] as const;
+const ABI = spokeVaultStableAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -84,7 +59,7 @@ async function auditLog(
         data: ctx.log.data,
         topics: ctx.log.topics,
     });
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         asset: Address;
         amount: bigint;
     } & Record<"from" | "to", Address>;

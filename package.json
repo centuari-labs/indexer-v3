@@ -17,7 +17,6 @@
         "build": "tsc -p tsconfig.json",
         "start": "node dist/index.js",
         "migrate": "tsx src/db/migrate.ts",
-        "copy-abi": "tsx scripts/copy-abi.ts",
         "test": "TZ=UTC NODE_OPTIONS=--experimental-vm-modules jest",
         "test:watch": "TZ=UTC NODE_OPTIONS=--experimental-vm-modules jest --watch",
         "lint": "biome check --write src",
@@ -27,6 +26,7 @@
     "dependencies": {
         "@centuari-labs/on-chain-effects": "^0.1.0",
         "@fastify/cors": "^10.0.1",
+        "dotenv": "^16.4.5",
         "fastify": "^5.1.0",
         "pg": "^8.13.1",
         "pino": "^9.5.0",

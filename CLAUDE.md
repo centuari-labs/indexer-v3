@@ -19,7 +19,6 @@ pnpm run dev        # tsx watch src/index.ts
 pnpm run build      # tsc
 pnpm run start      # node dist/index.js
 pnpm run migrate    # ts-node migrations/runner.ts (sequential .sql files)
-pnpm run copy-abi   # copy JSON ABIs from ../smart-contract-revamp/abi/ into src/abi/
 pnpm run test       # jest (processor unit tests + reorg replay)
 pnpm run lint       # biome check --apply
 pnpm run format     # biome format --write
@@ -57,7 +56,7 @@ indexer-v3/
 │   │   ├── server.ts            # Fastify bootstrap, /metrics (Prometheus)
 │   │   └── routes/
 │   │       └── health.ts        # GET /health — per-chain cursor lag (ops only)
-│   └── abi/                     # generated TS ABI constants (produced by `pnpm run copy-abi`)
+│   └── abi/                     # full ABI JSON files (synced from smart-contract-revamp via bin/sync-to-services.sh)
 ├── biome.json                   # copy from backend-v2
 ├── tsconfig.json                # strict, nodenext, ES2022
 ├── .env.example
@@ -184,6 +183,16 @@ Required env (see `.env.example`):
 | `LOG_LEVEL` | pino level (default `info`) |
 
 All addresses come from `smart-contract-revamp/deployments/deploy-<network>-latest.json` after running `./bin/run-all.sh`.
+
+### Address loading
+
+`src/index.ts` and `test/helpers/setup.ts` both call `dotenv.config({ path: '.env.contracts' })` followed by `dotenv.config()`. dotenv only sets unset keys by default, so `.env.contracts` (auto-generated, machine-managed) wins over `.env` (hand-edited, used for `DATABASE_URL`, RPC URLs, secrets). Regenerate `.env.contracts` and the synced ABIs by running:
+
+```bash
+cd smart-contract-revamp && ./bin/sync-to-services.sh
+```
+
+`bin/run-all.sh` invokes the sync script automatically at the end of a deploy (skip with `SKIP_SYNC=1`).
 
 ## Testing
 

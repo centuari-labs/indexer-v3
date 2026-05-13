@@ -1,3 +1,12 @@
+import path from "node:path";
+import dotenv from "dotenv";
+
+// Load .env.contracts FIRST so its keys win over .env (dotenv only sets
+// unset keys by default — first-wins gives priority to the auto-generated
+// file synced from smart-contract-revamp/bin/sync-to-services.sh).
+dotenv.config({ path: path.resolve(process.cwd(), ".env.contracts") });
+dotenv.config();
+
 import type { Address } from "viem";
 import { loadConfig } from "./config/env.js";
 import type { ChainConfig } from "./config/chains.js";

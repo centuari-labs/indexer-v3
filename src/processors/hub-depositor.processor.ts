@@ -1,4 +1,12 @@
-import { type Address, type Hex, decodeEventLog, keccak256, toHex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import hubDepositorAbi from "../abi/HubDepositor.json" with { type: "json" };
 import type {
     EventProcessor,
     ProcessorContext,
@@ -15,27 +23,9 @@ import { hexToBytea } from "../db/bytea.js";
  *
  * `deposit_event` idempotency is row-level via UNIQUE (tx_hash, log_index);
  * re-delivery is absorbed by ON CONFLICT DO NOTHING.
+ * Full ABI synced from smart-contract-revamp/abi/HubDepositor.json.
  */
-const ABI = [
-    {
-        type: "event",
-        name: "Deposited",
-        inputs: [
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "PayoutReleased",
-        inputs: [
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-] as const;
+const ABI = hubDepositorAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -61,7 +51,7 @@ async function insertDepositEvent(
     ) {
         return;
     }
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         user: Address;
         asset: Address;
         amount: bigint;

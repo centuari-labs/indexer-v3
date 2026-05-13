@@ -1,4 +1,14 @@
-import { type Address, type Hex, decodeEventLog, keccak256, toHex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import spokeDepositGatewayAbi from "../abi/SpokeDepositGateway.json" with {
+    type: "json",
+};
 import type {
     EventProcessor,
     ProcessorContext,
@@ -20,43 +30,10 @@ const log = createLogger("spoke-deposit-gateway");
  *   event SpokeNativeDeposit(bytes32 indexed depositId, ...);        // same shape
  *   event DepositRefunded(bytes32 indexed depositId, address indexed user,
  *                         address indexed asset, uint256 amount);
+ *
+ * Full ABI synced from smart-contract-revamp/abi/SpokeDepositGateway.json.
  */
-const ABI = [
-    {
-        type: "event",
-        name: "DepositInitiated",
-        inputs: [
-            { name: "depositId", type: "bytes32", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "hubEid", type: "uint32", indexed: false },
-            { name: "lzGuid", type: "bytes32", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "SpokeNativeDeposit",
-        inputs: [
-            { name: "depositId", type: "bytes32", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "hubEid", type: "uint32", indexed: false },
-            { name: "lzGuid", type: "bytes32", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "DepositRefunded",
-        inputs: [
-            { name: "depositId", type: "bytes32", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-] as const;
+const ABI = spokeDepositGatewayAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -87,7 +64,7 @@ async function handleInitiate(
     ) {
         return;
     }
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         depositId: Hex;
         user: Address;
         asset: Address;
@@ -159,7 +136,7 @@ async function handleRefund(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "DepositRefunded") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         depositId: Hex;
         user: Address;
         asset: Address;

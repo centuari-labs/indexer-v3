@@ -1,4 +1,14 @@
-import { type Address, type Hex, decodeEventLog, keccak256, toHex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import hubIntentSettlerAbi from "../abi/HubIntentSettler.json" with {
+    type: "json",
+};
 import type {
     EventProcessor,
     ProcessorContext,
@@ -20,38 +30,10 @@ const log = createLogger("hub-intent-settler");
  * Dormant in Phase 1 (decode-only, no writes):
  *   event SolverFillRegistered(...);   // solver fast-fill path — not yet live
  *   event DepositMarkedNoFill(bytes32 indexed depositId);  // no-solver marker
+ *
+ * Full ABI synced from smart-contract-revamp/abi/HubIntentSettler.json.
  */
-const ABI = [
-    {
-        type: "event",
-        name: "DepositConfirmed",
-        inputs: [
-            { name: "depositId", type: "bytes32", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: false },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "sourceChainId", type: "uint256", indexed: false },
-            { name: "classification", type: "uint8", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "SolverFillRegistered",
-        inputs: [
-            { name: "depositId", type: "bytes32", indexed: true },
-            { name: "solver", type: "address", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: false },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "sourceChainId", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "DepositMarkedNoFill",
-        inputs: [{ name: "depositId", type: "bytes32", indexed: true }],
-    },
-] as const;
+const ABI = hubIntentSettlerAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -72,7 +54,7 @@ async function handleDepositConfirmed(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "DepositConfirmed") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         depositId: Hex;
         user: Address;
         asset: Address;

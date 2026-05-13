@@ -1,4 +1,14 @@
-import { type Address, type Hex, decodeEventLog, keccak256, toHex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import withdrawalRegistryAbi from "../abi/WithdrawalRegistry.json" with {
+    type: "json",
+};
 import type {
     EventProcessor,
     ProcessorContext,
@@ -19,64 +29,10 @@ const log = createLogger("withdrawal-registry");
  * Hub-authoritative per-chain liquidity rollup (C11) lives on
  * ChainLiquidityIncremented / ChainLiquidityDecremented — `newTotal` is the
  * snapshot; we write it verbatim rather than deltaing.
+ *
+ * Full ABI synced from smart-contract-revamp/abi/WithdrawalRegistry.json.
  */
-const ABI = [
-    {
-        type: "event",
-        name: "WithdrawalRequested",
-        inputs: [
-            { name: "requestId", type: "bytes32", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "targetChainId", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "WithdrawalAuthorized",
-        inputs: [{ name: "requestId", type: "bytes32", indexed: true }],
-    },
-    {
-        type: "event",
-        name: "PayoutDispatched",
-        inputs: [
-            { name: "requestId", type: "bytes32", indexed: true },
-            { name: "targetChainId", type: "uint256", indexed: true },
-            { name: "lzGuid", type: "bytes32", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "WithdrawalCompleted",
-        inputs: [{ name: "requestId", type: "bytes32", indexed: true }],
-    },
-    {
-        type: "event",
-        name: "WithdrawalFailed",
-        inputs: [{ name: "requestId", type: "bytes32", indexed: true }],
-    },
-    {
-        type: "event",
-        name: "ChainLiquidityIncremented",
-        inputs: [
-            { name: "asset", type: "address", indexed: true },
-            { name: "chainId", type: "uint256", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "newTotal", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "ChainLiquidityDecremented",
-        inputs: [
-            { name: "asset", type: "address", indexed: true },
-            { name: "chainId", type: "uint256", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "newTotal", type: "uint256", indexed: false },
-        ],
-    },
-] as const;
+const ABI = withdrawalRegistryAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -146,7 +102,7 @@ async function handleWithdrawalRequested(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "WithdrawalRequested") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         requestId: Hex;
         user: Address;
         asset: Address;
@@ -207,7 +163,7 @@ async function transitionState(
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== expectedEvent) return;
-    const args = decoded.args as { requestId: Hex };
+    const args = decoded.args as unknown as { requestId: Hex };
     const stamps = requireStamps(ctx);
     if (!stamps) return;
 
@@ -264,7 +220,7 @@ async function handlePayoutDispatched(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "PayoutDispatched") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         requestId: Hex;
         targetChainId: bigint;
         lzGuid: Hex;
@@ -333,7 +289,7 @@ async function handleChainLiquidity(ctx: ProcessorContext): Promise<void> {
     ) {
         return;
     }
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         asset: Address;
         chainId: bigint;
         amount: bigint;

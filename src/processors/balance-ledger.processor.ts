@@ -1,4 +1,12 @@
-import { decodeEventLog, keccak256, toHex, type Address, type Hex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import balanceLedgerAbi from "../abi/BalanceLedger.json" with { type: "json" };
 import { hexToBytea } from "../db/bytea.js";
 import type {
     EventProcessor,
@@ -6,7 +14,8 @@ import type {
 } from "../core/event-dispatcher.js";
 
 /**
- * BalanceLedger events (abridged — full ABI is copied from smart-contract-revamp/abi).
+ * BalanceLedger events. Full ABI synced from smart-contract-revamp via
+ * bin/sync-to-services.sh — see indexer-v3/src/abi/BalanceLedger.json.
  *
  * The `CollateralFlagSet` signature is the protocol-critical 5-param shape:
  *   event CollateralFlagSet(address indexed writer, address indexed user,
@@ -15,41 +24,7 @@ import type {
  *  - flaggedAt == 0 is the unmark sentinel.
  *  - Repeat-mark does NOT refresh flaggedAt (BalanceLedger enforces; we mirror).
  */
-const ABI = [
-    {
-        type: "event",
-        name: "Credited",
-        inputs: [
-            { name: "writer", type: "address", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "newAvailable", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "Debited",
-        inputs: [
-            { name: "writer", type: "address", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-            { name: "newAvailable", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "CollateralFlagSet",
-        inputs: [
-            { name: "writer", type: "address", indexed: true },
-            { name: "user", type: "address", indexed: true },
-            { name: "asset", type: "address", indexed: true },
-            { name: "used", type: "bool", indexed: false },
-            { name: "flaggedAt", type: "uint64", indexed: false },
-        ],
-    },
-] as const;
+const ABI = balanceLedgerAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -98,7 +73,7 @@ async function handleBalanceDelta(
     if (decoded.eventName !== "Credited" && decoded.eventName !== "Debited") {
         return;
     }
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         user: Address;
         asset: Address;
         amount: bigint;
@@ -166,7 +141,7 @@ async function handleCollateralFlagSet(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "CollateralFlagSet") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         writer: Address;
         user: Address;
         asset: Address;

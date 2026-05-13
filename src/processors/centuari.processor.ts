@@ -1,4 +1,12 @@
-import { type Address, type Hex, decodeEventLog, keccak256, toHex } from "viem";
+import {
+    type Abi,
+    type Address,
+    type Hex,
+    decodeEventLog,
+    keccak256,
+    toHex,
+} from "viem";
+import centuariAbi from "../abi/Centuari.json" with { type: "json" };
 import type {
     EventProcessor,
     ProcessorContext,
@@ -15,60 +23,9 @@ const log = createLogger("centuari");
  * Collateral loophole invariant: Repaid does NOT touch used_as_collateral.
  * Flag state is owned exclusively by BalanceLedger.CollateralFlagSet; unflag
  * goes through CollateralManager.unflagFor after the 24h lock.
+ * Full ABI synced from smart-contract-revamp/abi/Centuari.json.
  */
-const ABI = [
-    {
-        type: "event",
-        name: "MarketCreated",
-        inputs: [
-            { name: "marketId", type: "bytes32", indexed: true },
-            { name: "loanToken", type: "address", indexed: true },
-            { name: "maturity", type: "uint256", indexed: true },
-        ],
-    },
-    {
-        type: "event",
-        name: "BorrowPositionCreated",
-        inputs: [
-            { name: "marketId", type: "bytes32", indexed: true },
-            { name: "borrower", type: "address", indexed: true },
-            { name: "principal", type: "uint256", indexed: false },
-            { name: "debt", type: "uint256", indexed: false },
-            { name: "rate", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "LendPositionCreated",
-        inputs: [
-            { name: "marketId", type: "bytes32", indexed: true },
-            { name: "lender", type: "address", indexed: true },
-            { name: "bondToken", type: "address", indexed: true },
-            { name: "cbtAmount", type: "uint256", indexed: false },
-            { name: "principal", type: "uint256", indexed: false },
-            { name: "rate", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "LendPositionWithdrawn",
-        inputs: [
-            { name: "marketId", type: "bytes32", indexed: true },
-            { name: "lender", type: "address", indexed: true },
-            { name: "cbtBurned", type: "uint256", indexed: false },
-            { name: "amountWithdrawn", type: "uint256", indexed: false },
-        ],
-    },
-    {
-        type: "event",
-        name: "Repaid",
-        inputs: [
-            { name: "marketId", type: "bytes32", indexed: true },
-            { name: "borrower", type: "address", indexed: true },
-            { name: "amount", type: "uint256", indexed: false },
-        ],
-    },
-] as const;
+const ABI = centuariAbi as Abi;
 
 function topicFor(sig: string): Hex {
     return keccak256(toHex(sig));
@@ -136,7 +93,7 @@ async function handleMarketCreated(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "MarketCreated") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         marketId: Hex;
         loanToken: Address;
         maturity: bigint;
@@ -172,7 +129,7 @@ async function handleBorrowPositionCreated(
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "BorrowPositionCreated") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         marketId: Hex;
         borrower: Address;
         principal: bigint;
@@ -232,7 +189,7 @@ async function handleRepaid(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "Repaid") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         marketId: Hex;
         borrower: Address;
         amount: bigint;
@@ -289,7 +246,7 @@ async function handleLendPositionCreated(ctx: ProcessorContext): Promise<void> {
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "LendPositionCreated") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         marketId: Hex;
         lender: Address;
         bondToken: Address;
@@ -354,7 +311,7 @@ async function handleLendPositionWithdrawn(
         topics: ctx.log.topics,
     });
     if (decoded.eventName !== "LendPositionWithdrawn") return;
-    const args = decoded.args as {
+    const args = decoded.args as unknown as {
         marketId: Hex;
         lender: Address;
         cbtBurned: bigint;
