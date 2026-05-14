@@ -212,4 +212,4 @@ cd smart-contract-revamp && ./bin/sync-to-services.sh
 
 ## Phase 1 Plan Reference
 
-Full module spec, dependencies, and verification checklist: `smart-contract-revamp/docs/phase-1-cross-chain-balance-ledger.md` — Module 8. Read C6 (Ponder rejection), C10 (two-writer idempotency pattern), C11 (SPOKE_NATIVE custody) before editing any processor.
+Full module spec: `smart-contract-revamp/docs/cross-chain-launch-plan.md` §4.1 (M8 / indexer-v3 cross-chain processors) — read §2 (C6 Ponder rejection, C10 two-writer idempotency, C11 SPOKE_NATIVE custody) before editing any processor. Original Module 8 detail preserved in `smart-contract-revamp/docs/archive/phase-1-cross-chain-balance-ledger.md`.
