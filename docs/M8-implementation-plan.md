@@ -1,7 +1,7 @@
 # M8 — indexer-v3 Implementation Plan
 
 **Status:** DRAFT — 2026-04-19
-**Source of truth:** `smart-contract-revamp/docs/cross-chain-launch-plan.md` §4.1 (M8 cross-chain processors) and `smart-contract-revamp/docs/hub-only-launch-plan.md` Track B (collateral lifecycle). Original deep specs preserved in `smart-contract-revamp/docs/archive/phase-1-cross-chain-balance-ledger.md` Module 8 and `archive/collateral-loophole-fix-plan.md` P4/P5.
+**Source of truth:** `dev-docs/architecture-html/launches/cross-chain.html` §4.1 (M8 cross-chain processors) and `dev-docs/architecture-html/launches/hub-only.html` Track B (collateral lifecycle). Original deep specs preserved in `smart-contract-revamp/docs/archive/phase-1-cross-chain-balance-ledger.md` Module 8 and `archive/collateral-loophole-fix-plan.md` P4/P5.
 **Repo:** `indexer-v3/` (created, empty except `.git/`).
 
 > **UPDATE 2026-04-22 — C10 helper extracted to external package.** The `applyOnChainEffect` primitive has been moved out of `indexer-v3/src/shared/` and published as the private npm package [`@centuari-labs/on-chain-effects`](https://github.com/centuari-labs/on-chain-effects) on GitHub Packages. Consumers (indexer-v3, backend-v2, settlement-engine, sweeper-bot) now import `from "@centuari-labs/on-chain-effects"` — **not** `from "@centuari/indexer-v3/shared/apply-on-chain-effect"`. Consequently, Step 1's `./shared/apply-on-chain-effect` subpath export is obsolete, Step 9's workspace-boundary check no longer applies, and the umbrella `pnpm-workspace.yaml` from Prerequisite 2 is slated for removal in Phase E of the package-extraction migration (`~/.claude/plans/yes-help-me-create-enumerated-lightning.md`). The body below is preserved as a historical record of what was built.
@@ -253,8 +253,8 @@ Each step ends with a green test run before moving on.
 
 ## Files to consult (source of truth)
 
-- `smart-contract-revamp/docs/cross-chain-launch-plan.md` §4.1 + §2 (C10) — scope + idempotency spec.
-- `smart-contract-revamp/docs/hub-only-launch-plan.md` Track B — collateral event + backend endpoints (deep spec in `archive/collateral-loophole-fix-plan.md` P4/P5).
+- `dev-docs/architecture-html/launches/cross-chain.html` §4.1 + §2 (C10) — scope + idempotency spec.
+- `dev-docs/architecture-html/launches/hub-only.html` Track B — collateral event + backend endpoints (deep spec in `smart-contract-revamp/docs/archive/collateral-loophole-fix-plan.md` P4/P5).
 - `smart-contract-revamp/src/interfaces/IBalanceLedger.sol` — `CollateralFlagSet` event shape (5-param).
 - `smart-contract-revamp/src/interfaces/ICentuari.sol`, `ISettlement.sol`, `cross-chain/IHubIntentSettler.sol`, `IWithdrawalRegistry.sol`, `ISettlementLedger.sol` — every event topic the indexer subscribes to.
 - `smart-contract-revamp/abi/` — generated ABIs; run `./bin/export-abi.sh` before starting and copy into `indexer-v3/abi/`.
