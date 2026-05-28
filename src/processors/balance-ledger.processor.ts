@@ -6,6 +6,12 @@ import {
     keccak256,
     toHex,
 } from "viem";
+import {
+    applyCollateralFlagSetMutation,
+    applyCreditedMutation,
+    applyDebitedMutation,
+    isAlreadyStamped,
+} from "@centuari-labs/on-chain-effects";
 import balanceLedgerAbi from "../abi/BalanceLedger.json" with { type: "json" };
 import { hexToBytea } from "../db/bytea.js";
 import type {
@@ -88,50 +94,32 @@ async function handleBalanceDelta(
         return;
     }
 
+    const stamp = {
+        txHash: ctx.log.transactionHash,
+        logIndex: ctx.log.logIndex,
+        blockHash: ctx.log.blockHash,
+        blockNumber: ctx.log.blockNumber,
+    };
+
     // Idempotency safety net: if this exact (tx_hash, log_index) has already
     // been stamped by the eager path, skip.
-    const stamped = await ctx.client.query<{ count: string }>(
-        `SELECT count(*)::text AS count
-           FROM user_balance
-          WHERE user_address = $1 AND asset = $2
-            AND applied_by_tx_hash = $3 AND applied_by_log_index = $4`,
-        [
-            hexToBytea(args.user),
-            hexToBytea(args.asset),
-            hexToBytea(ctx.log.transactionHash),
-            ctx.log.logIndex,
-        ],
-    );
-    if (stamped.rows[0] && Number(stamped.rows[0].count) > 0) {
+    if (
+        await isAlreadyStamped(
+            ctx.client,
+            "user_balance",
+            "user_address = $1 AND asset = $2",
+            [hexToBytea(args.user), hexToBytea(args.asset)],
+            stamp,
+        )
+    ) {
         return;
     }
 
-    const delta =
-        op === "credit" ? args.amount.toString() : `-${args.amount.toString()}`;
-
-    await ctx.client.query(
-        `INSERT INTO user_balance
-            (user_address, asset, available, used_as_collateral, flagged_at,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number, updated_at)
-         VALUES ($1, $2, $3::numeric, false, 0, $4, $5, $6, $7, now())
-         ON CONFLICT (user_address, asset) DO UPDATE SET
-            available = user_balance.available + EXCLUDED.available,
-            applied_by_tx_hash = EXCLUDED.applied_by_tx_hash,
-            applied_by_log_index = EXCLUDED.applied_by_log_index,
-            applied_by_block_hash = EXCLUDED.applied_by_block_hash,
-            applied_by_block_number = EXCLUDED.applied_by_block_number,
-            updated_at = now()`,
-        [
-            hexToBytea(args.user),
-            hexToBytea(args.asset),
-            delta,
-            hexToBytea(ctx.log.transactionHash),
-            ctx.log.logIndex,
-            hexToBytea(ctx.log.blockHash),
-            ctx.log.blockNumber.toString(),
-        ],
-    );
+    if (op === "credit") {
+        await applyCreditedMutation(ctx.client, args, stamp);
+    } else {
+        await applyDebitedMutation(ctx.client, args, stamp);
+    }
 }
 
 async function handleCollateralFlagSet(ctx: ProcessorContext): Promise<void> {
@@ -158,52 +146,31 @@ async function handleCollateralFlagSet(ctx: ProcessorContext): Promise<void> {
         return;
     }
 
+    const stamp = {
+        txHash: ctx.log.transactionHash,
+        logIndex: ctx.log.logIndex,
+        blockHash: ctx.log.blockHash,
+        blockNumber: ctx.log.blockNumber,
+    };
+
     // C10 safety net: if the eager path already stamped this row with the
     // same tx hash, skip entirely — do not overwrite stamps or flip the flag.
-    const stamped = await ctx.client.query<{ count: string }>(
-        `SELECT count(*)::text AS count
-           FROM user_balance
-          WHERE user_address = $1 AND asset = $2
-            AND applied_by_tx_hash = $3 AND applied_by_log_index = $4`,
-        [
-            hexToBytea(args.user),
-            hexToBytea(args.asset),
-            hexToBytea(ctx.log.transactionHash),
-            ctx.log.logIndex,
-        ],
-    );
-    if (stamped.rows[0] && Number(stamped.rows[0].count) > 0) {
+    if (
+        await isAlreadyStamped(
+            ctx.client,
+            "user_balance",
+            "user_address = $1 AND asset = $2",
+            [hexToBytea(args.user), hexToBytea(args.asset)],
+            stamp,
+        )
+    ) {
         return;
     }
 
     // Write the flag verbatim. `flaggedAt == 0` on unmark is authoritative.
     // Repeat-mark is a no-op on flaggedAt at the contract level; we simply
     // mirror whatever the event carries.
-    await ctx.client.query(
-        `INSERT INTO user_balance
-            (user_address, asset, used_as_collateral, flagged_at,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-         ON CONFLICT (user_address, asset) DO UPDATE SET
-            used_as_collateral = EXCLUDED.used_as_collateral,
-            flagged_at = EXCLUDED.flagged_at,
-            applied_by_tx_hash = EXCLUDED.applied_by_tx_hash,
-            applied_by_log_index = EXCLUDED.applied_by_log_index,
-            applied_by_block_hash = EXCLUDED.applied_by_block_hash,
-            applied_by_block_number = EXCLUDED.applied_by_block_number,
-            updated_at = now()`,
-        [
-            hexToBytea(args.user),
-            hexToBytea(args.asset),
-            args.used,
-            args.flaggedAt.toString(),
-            hexToBytea(ctx.log.transactionHash),
-            ctx.log.logIndex,
-            hexToBytea(ctx.log.blockHash),
-            ctx.log.blockNumber.toString(),
-        ],
-    );
+    await applyCollateralFlagSetMutation(ctx.client, args, stamp);
 
     // Phase 4 tail-path queue cleanup. The shared `pending_collateral_flags`
     // table is the user's pre-settlement intent buffer; once the on-chain

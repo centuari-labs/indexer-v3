@@ -6,6 +6,13 @@ import {
     keccak256,
     toHex,
 } from "viem";
+import {
+    applyBorrowPositionCreatedMutation,
+    applyLendPositionCreatedMutation,
+    applyLendPositionWithdrawnMutation,
+    applyRepaidMutation,
+    isAlreadyStamped,
+} from "@centuari-labs/on-chain-effects";
 import centuariAbi from "../abi/Centuari.json" with { type: "json" };
 import type {
     EventProcessor,
@@ -67,25 +74,6 @@ function requireStamps(ctx: ProcessorContext): Stamps | null {
     };
 }
 
-async function alreadyApplied(
-    ctx: ProcessorContext,
-    table: "market" | "borrow_position" | "lend_position",
-    pkCols: string,
-    pkValues: unknown[],
-    txHash: Hex,
-    logIndex: number,
-): Promise<boolean> {
-    const res = await ctx.client.query<{ count: string }>(
-        `SELECT count(*)::text AS count
-           FROM ${table}
-          WHERE ${pkCols}
-            AND applied_by_tx_hash = $${pkValues.length + 1}
-            AND applied_by_log_index = $${pkValues.length + 2}`,
-        [...pkValues, hexToBytea(txHash), logIndex],
-    );
-    return Boolean(res.rows[0] && Number(res.rows[0].count) > 0);
-}
-
 async function handleMarketCreated(ctx: ProcessorContext): Promise<void> {
     const decoded = decodeEventLog({
         abi: ABI,
@@ -140,46 +128,18 @@ async function handleBorrowPositionCreated(
     if (!stamps) return;
 
     if (
-        await alreadyApplied(
-            ctx,
+        await isAlreadyStamped(
+            ctx.client,
             "borrow_position",
             "market_id = $1 AND borrower = $2",
             [hexToBytea(args.marketId), hexToBytea(args.borrower)],
-            stamps.txHash,
-            stamps.logIndex,
+            stamps,
         )
     ) {
         return;
     }
 
-    await ctx.client.query(
-        `INSERT INTO borrow_position
-            (market_id, borrower, principal, debt, rate,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number, updated_at)
-         VALUES ($1, $2, $3::numeric, $4::numeric, $5::numeric,
-                 $6, $7, $8, $9, now())
-         ON CONFLICT (market_id, borrower) DO UPDATE SET
-            principal = borrow_position.principal + EXCLUDED.principal,
-            debt = borrow_position.debt + EXCLUDED.debt,
-            rate = EXCLUDED.rate,
-            applied_by_tx_hash = EXCLUDED.applied_by_tx_hash,
-            applied_by_log_index = EXCLUDED.applied_by_log_index,
-            applied_by_block_hash = EXCLUDED.applied_by_block_hash,
-            applied_by_block_number = EXCLUDED.applied_by_block_number,
-            updated_at = now()`,
-        [
-            hexToBytea(args.marketId),
-            hexToBytea(args.borrower),
-            args.principal.toString(),
-            args.debt.toString(),
-            args.rate.toString(),
-            hexToBytea(stamps.txHash),
-            stamps.logIndex,
-            hexToBytea(stamps.blockHash),
-            stamps.blockNumber.toString(),
-        ],
-    );
+    await applyBorrowPositionCreatedMutation(ctx.client, args, stamps);
 }
 
 async function handleRepaid(ctx: ProcessorContext): Promise<void> {
@@ -198,13 +158,12 @@ async function handleRepaid(ctx: ProcessorContext): Promise<void> {
     if (!stamps) return;
 
     if (
-        await alreadyApplied(
-            ctx,
+        await isAlreadyStamped(
+            ctx.client,
             "borrow_position",
             "market_id = $1 AND borrower = $2",
             [hexToBytea(args.marketId), hexToBytea(args.borrower)],
-            stamps.txHash,
-            stamps.logIndex,
+            stamps,
         )
     ) {
         return;
@@ -212,26 +171,8 @@ async function handleRepaid(ctx: ProcessorContext): Promise<void> {
 
     // Invariant: do NOT touch used_as_collateral. Unflag is the user's explicit
     // action through CollateralManager after a 24h lock; never implicit.
-    const res = await ctx.client.query(
-        `UPDATE borrow_position
-            SET debt = GREATEST(debt - $3::numeric, 0),
-                applied_by_tx_hash = $4,
-                applied_by_log_index = $5,
-                applied_by_block_hash = $6,
-                applied_by_block_number = $7,
-                updated_at = now()
-          WHERE market_id = $1 AND borrower = $2 AND debt > 0`,
-        [
-            hexToBytea(args.marketId),
-            hexToBytea(args.borrower),
-            args.amount.toString(),
-            hexToBytea(stamps.txHash),
-            stamps.logIndex,
-            hexToBytea(stamps.blockHash),
-            stamps.blockNumber.toString(),
-        ],
-    );
-    if (res.rowCount === 0) {
+    const rowCount = await applyRepaidMutation(ctx.client, args, stamps);
+    if (rowCount === 0) {
         log.warn(
             { marketId: args.marketId, borrower: args.borrower },
             "Repaid for missing or already-zero borrow position",
@@ -258,48 +199,18 @@ async function handleLendPositionCreated(ctx: ProcessorContext): Promise<void> {
     if (!stamps) return;
 
     if (
-        await alreadyApplied(
-            ctx,
+        await isAlreadyStamped(
+            ctx.client,
             "lend_position",
             "market_id = $1 AND lender = $2",
             [hexToBytea(args.marketId), hexToBytea(args.lender)],
-            stamps.txHash,
-            stamps.logIndex,
+            stamps,
         )
     ) {
         return;
     }
 
-    await ctx.client.query(
-        `INSERT INTO lend_position
-            (market_id, lender, bond_token, cbt_balance, principal, rate,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number, updated_at)
-         VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric,
-                 $7, $8, $9, $10, now())
-         ON CONFLICT (market_id, lender) DO UPDATE SET
-            bond_token = EXCLUDED.bond_token,
-            cbt_balance = lend_position.cbt_balance + EXCLUDED.cbt_balance,
-            principal = lend_position.principal + EXCLUDED.principal,
-            rate = EXCLUDED.rate,
-            applied_by_tx_hash = EXCLUDED.applied_by_tx_hash,
-            applied_by_log_index = EXCLUDED.applied_by_log_index,
-            applied_by_block_hash = EXCLUDED.applied_by_block_hash,
-            applied_by_block_number = EXCLUDED.applied_by_block_number,
-            updated_at = now()`,
-        [
-            hexToBytea(args.marketId),
-            hexToBytea(args.lender),
-            hexToBytea(args.bondToken),
-            args.cbtAmount.toString(),
-            args.principal.toString(),
-            args.rate.toString(),
-            hexToBytea(stamps.txHash),
-            stamps.logIndex,
-            hexToBytea(stamps.blockHash),
-            stamps.blockNumber.toString(),
-        ],
-    );
+    await applyLendPositionCreatedMutation(ctx.client, args, stamps);
 }
 
 async function handleLendPositionWithdrawn(
@@ -321,40 +232,23 @@ async function handleLendPositionWithdrawn(
     if (!stamps) return;
 
     if (
-        await alreadyApplied(
-            ctx,
+        await isAlreadyStamped(
+            ctx.client,
             "lend_position",
             "market_id = $1 AND lender = $2",
             [hexToBytea(args.marketId), hexToBytea(args.lender)],
-            stamps.txHash,
-            stamps.logIndex,
+            stamps,
         )
     ) {
         return;
     }
 
-    const res = await ctx.client.query(
-        `UPDATE lend_position
-            SET cbt_balance = GREATEST(cbt_balance - $3::numeric, 0),
-                principal = GREATEST(principal - $4::numeric, 0),
-                applied_by_tx_hash = $5,
-                applied_by_log_index = $6,
-                applied_by_block_hash = $7,
-                applied_by_block_number = $8,
-                updated_at = now()
-          WHERE market_id = $1 AND lender = $2 AND cbt_balance > 0`,
-        [
-            hexToBytea(args.marketId),
-            hexToBytea(args.lender),
-            args.cbtBurned.toString(),
-            args.amountWithdrawn.toString(),
-            hexToBytea(stamps.txHash),
-            stamps.logIndex,
-            hexToBytea(stamps.blockHash),
-            stamps.blockNumber.toString(),
-        ],
+    const rowCount = await applyLendPositionWithdrawnMutation(
+        ctx.client,
+        args,
+        stamps,
     );
-    if (res.rowCount === 0) {
+    if (rowCount === 0) {
         log.warn(
             { marketId: args.marketId, lender: args.lender },
             "LendPositionWithdrawn for missing or zero-balance lend position",

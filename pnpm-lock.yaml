@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@centuari-labs/on-chain-effects':
-        specifier: ^0.1.0
-        version: 0.1.0(pg@8.20.0)(viem@2.48.4(typescript@5.9.3)(zod@3.25.76))
+        specifier: ^0.3.0
+        version: 0.3.0(pg@8.20.0)(viem@2.48.4(typescript@5.9.3)(zod@3.25.76))
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0
@@ -290,8 +290,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@centuari-labs/on-chain-effects@0.1.0':
-    resolution: {integrity: sha512-hzoRSK5JlCUeLFyBfBv+yjE6pIIAxZsfmE3CkJW9NCdr3YklrasuJMz7yKnZkdfREeO+2ECUAuhDLW0aWIgRvA==, tarball: https://npm.pkg.github.com/download/@centuari-labs/on-chain-effects/0.1.0/6784c86160fcf05a8046aee17ae601b854aef0ab}
+  '@centuari-labs/on-chain-effects@0.3.0':
+    resolution: {integrity: sha512-UH1CSMPTpFjP4waObdeCzQh1ZiokttY8nFCAH3AvlVEcN6/pe/hCbrhzR3m31MvUNMY5xCotp8dpdqILg0NIfg==, tarball: https://npm.pkg.github.com/download/@centuari-labs/on-chain-effects/0.3.0/8c81dd4285c37298a6ab7667fd1b794b907424e5}
     engines: {node: '>=22'}
     peerDependencies:
       pg: ^8.13.0
@@ -2187,7 +2187,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.3.4':
     optional: true
 
-  '@centuari-labs/on-chain-effects@0.1.0(pg@8.20.0)(viem@2.48.4(typescript@5.9.3)(zod@3.25.76))':
+  '@centuari-labs/on-chain-effects@0.3.0(pg@8.20.0)(viem@2.48.4(typescript@5.9.3)(zod@3.25.76))':
     dependencies:
       pg: 8.20.0
       viem: 2.48.4(typescript@5.9.3)(zod@3.25.76)
