@@ -192,7 +192,7 @@ All addresses come from `smart-contract-revamp/deployments/deploy-<network>-late
 cd smart-contract-revamp && ./bin/sync-to-services.sh
 ```
 
-`bin/run-all.sh` invokes the sync script automatically at the end of a deploy (skip with `SKIP_SYNC=1`).
+`bin/run-all.sh` invokes the sync script automatically at the end of a deploy (skip with `SKIP_SYNC=1`), then re-runs it with `--check` to fail the deploy if any service drifted. Run `./bin/sync-to-services.sh --check` yourself to confirm indexer-v3's `.env.contracts` + `src/abi/*.json` match the latest deployment (non-zero exit on drift).
 
 ## Testing
 
