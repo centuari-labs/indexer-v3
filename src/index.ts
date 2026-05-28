@@ -21,6 +21,12 @@ const log = createLogger("main");
 
 async function main(): Promise<void> {
     const cfg = loadConfig();
+    log.info(
+        { hubOnly: cfg.hubOnly, chains: cfg.chains.map((c) => c.key) },
+        cfg.hubOnly
+            ? "hub-only mode — spoke watchers disabled"
+            : "multi-chain mode — hub + spokes",
+    );
     const pool = createPool(cfg.databaseUrl);
 
     log.info("running migrations");

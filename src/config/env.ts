@@ -15,6 +15,13 @@ const hexAddress = z
 
 const optionalHex = hexAddress.optional();
 
+// Parse a boolean from an env string. Unset — or anything other than "true" /
+// "1" (case-insensitive) — is false, so the default stays full multi-chain mode.
+const envFlag = z
+    .string()
+    .optional()
+    .transform((v) => v?.toLowerCase() === "true" || v === "1");
+
 const baseEnvSchema = z.object({
     DATABASE_URL: z.string().url(),
     PORT: z.coerce.number().int().positive().default(42069),
@@ -24,6 +31,11 @@ const baseEnvSchema = z.object({
     NODE_ENV: z
         .enum(["development", "test", "production"])
         .default("development"),
+
+    // Hub-only launch gate. When true, only the Arbitrum hub ChainWatcher runs;
+    // the spoke watchers are not created and the SPOKE_* RPC/chain-id env is not
+    // required. Default false → index the hub + all 4 spokes (full mode).
+    HUB_ONLY: envFlag,
 
     // Hub (Arbitrum)
     HUB_CHAIN_ID: z.coerce.number().int().positive(),
@@ -46,9 +58,9 @@ const baseEnvSchema = z.object({
     COLLATERAL_MANAGER_ADDRESS: optionalHex,
 
     // Spokes
-    SPOKE_BASE_CHAIN_ID: z.coerce.number().int().positive(),
-    SPOKE_BASE_RPC_URL_WS: z.string().url(),
-    SPOKE_BASE_RPC_URL_HTTP: z.string().url(),
+    SPOKE_BASE_CHAIN_ID: z.coerce.number().int().positive().optional(),
+    SPOKE_BASE_RPC_URL_WS: z.string().url().optional(),
+    SPOKE_BASE_RPC_URL_HTTP: z.string().url().optional(),
     SPOKE_BASE_START_BLOCK: z.coerce.bigint().default(0n),
     SPOKE_BASE_FINALITY_DEPTH: z.coerce
         .number()
@@ -58,9 +70,9 @@ const baseEnvSchema = z.object({
     SPOKE_BASE_DEPOSIT_GATEWAY_ADDRESS: optionalHex,
     SPOKE_BASE_VAULT_STABLE_ADDRESS: optionalHex,
 
-    SPOKE_ETHEREUM_CHAIN_ID: z.coerce.number().int().positive(),
-    SPOKE_ETHEREUM_RPC_URL_WS: z.string().url(),
-    SPOKE_ETHEREUM_RPC_URL_HTTP: z.string().url(),
+    SPOKE_ETHEREUM_CHAIN_ID: z.coerce.number().int().positive().optional(),
+    SPOKE_ETHEREUM_RPC_URL_WS: z.string().url().optional(),
+    SPOKE_ETHEREUM_RPC_URL_HTTP: z.string().url().optional(),
     SPOKE_ETHEREUM_START_BLOCK: z.coerce.bigint().default(0n),
     SPOKE_ETHEREUM_FINALITY_DEPTH: z.coerce
         .number()
@@ -70,9 +82,9 @@ const baseEnvSchema = z.object({
     SPOKE_ETHEREUM_DEPOSIT_GATEWAY_ADDRESS: optionalHex,
     SPOKE_ETHEREUM_VAULT_STABLE_ADDRESS: optionalHex,
 
-    SPOKE_BNB_CHAIN_ID: z.coerce.number().int().positive(),
-    SPOKE_BNB_RPC_URL_WS: z.string().url(),
-    SPOKE_BNB_RPC_URL_HTTP: z.string().url(),
+    SPOKE_BNB_CHAIN_ID: z.coerce.number().int().positive().optional(),
+    SPOKE_BNB_RPC_URL_WS: z.string().url().optional(),
+    SPOKE_BNB_RPC_URL_HTTP: z.string().url().optional(),
     SPOKE_BNB_START_BLOCK: z.coerce.bigint().default(0n),
     SPOKE_BNB_FINALITY_DEPTH: z.coerce
         .number()
@@ -82,9 +94,9 @@ const baseEnvSchema = z.object({
     SPOKE_BNB_DEPOSIT_GATEWAY_ADDRESS: optionalHex,
     SPOKE_BNB_VAULT_STABLE_ADDRESS: optionalHex,
 
-    SPOKE_POLYGON_CHAIN_ID: z.coerce.number().int().positive(),
-    SPOKE_POLYGON_RPC_URL_WS: z.string().url(),
-    SPOKE_POLYGON_RPC_URL_HTTP: z.string().url(),
+    SPOKE_POLYGON_CHAIN_ID: z.coerce.number().int().positive().optional(),
+    SPOKE_POLYGON_RPC_URL_WS: z.string().url().optional(),
+    SPOKE_POLYGON_RPC_URL_HTTP: z.string().url().optional(),
     SPOKE_POLYGON_START_BLOCK: z.coerce.bigint().default(0n),
     SPOKE_POLYGON_FINALITY_DEPTH: z.coerce
         .number()
@@ -102,6 +114,7 @@ export interface AppConfig {
     port: number;
     logLevel: string;
     nodeEnv: "development" | "test" | "production";
+    hubOnly: boolean;
     chains: ChainConfig[];
 }
 
@@ -125,29 +138,38 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
             settlementLedger: env.SETTLEMENT_LEDGER_ADDRESS,
             collateralManager: env.COLLATERAL_MANAGER_ADDRESS,
         }),
-        buildChain(env, CHAIN_KEYS.SPOKE_BASE, "spoke", {
-            spokeDepositGateway: env.SPOKE_BASE_DEPOSIT_GATEWAY_ADDRESS,
-            spokeVaultStable: env.SPOKE_BASE_VAULT_STABLE_ADDRESS,
-        }),
-        buildChain(env, CHAIN_KEYS.SPOKE_ETHEREUM, "spoke", {
-            spokeDepositGateway: env.SPOKE_ETHEREUM_DEPOSIT_GATEWAY_ADDRESS,
-            spokeVaultStable: env.SPOKE_ETHEREUM_VAULT_STABLE_ADDRESS,
-        }),
-        buildChain(env, CHAIN_KEYS.SPOKE_BNB, "spoke", {
-            spokeDepositGateway: env.SPOKE_BNB_DEPOSIT_GATEWAY_ADDRESS,
-            spokeVaultStable: env.SPOKE_BNB_VAULT_STABLE_ADDRESS,
-        }),
-        buildChain(env, CHAIN_KEYS.SPOKE_POLYGON, "spoke", {
-            spokeDepositGateway: env.SPOKE_POLYGON_DEPOSIT_GATEWAY_ADDRESS,
-            spokeVaultStable: env.SPOKE_POLYGON_VAULT_STABLE_ADDRESS,
-        }),
     ];
+
+    // Hub-only launch: skip the spoke watchers entirely — no spoke RPC
+    // connections and no spoke "watcher" error noise. Spoke env is optional in
+    // this mode, so a hub-only deploy needn't supply (dead) spoke RPC URLs.
+    if (!env.HUB_ONLY) {
+        chains.push(
+            buildChain(env, CHAIN_KEYS.SPOKE_BASE, "spoke", {
+                spokeDepositGateway: env.SPOKE_BASE_DEPOSIT_GATEWAY_ADDRESS,
+                spokeVaultStable: env.SPOKE_BASE_VAULT_STABLE_ADDRESS,
+            }),
+            buildChain(env, CHAIN_KEYS.SPOKE_ETHEREUM, "spoke", {
+                spokeDepositGateway: env.SPOKE_ETHEREUM_DEPOSIT_GATEWAY_ADDRESS,
+                spokeVaultStable: env.SPOKE_ETHEREUM_VAULT_STABLE_ADDRESS,
+            }),
+            buildChain(env, CHAIN_KEYS.SPOKE_BNB, "spoke", {
+                spokeDepositGateway: env.SPOKE_BNB_DEPOSIT_GATEWAY_ADDRESS,
+                spokeVaultStable: env.SPOKE_BNB_VAULT_STABLE_ADDRESS,
+            }),
+            buildChain(env, CHAIN_KEYS.SPOKE_POLYGON, "spoke", {
+                spokeDepositGateway: env.SPOKE_POLYGON_DEPOSIT_GATEWAY_ADDRESS,
+                spokeVaultStable: env.SPOKE_POLYGON_VAULT_STABLE_ADDRESS,
+            }),
+        );
+    }
 
     return {
         databaseUrl: env.DATABASE_URL,
         port: env.PORT,
         logLevel: env.LOG_LEVEL,
         nodeEnv: env.NODE_ENV,
+        hubOnly: env.HUB_ONLY,
         chains,
     };
 }
