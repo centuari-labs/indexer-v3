@@ -80,7 +80,7 @@ indexer-v3/
 
 ### C10 Idempotency — `@centuari-labs/on-chain-effects`
 
-The single source of truth for the "verify-then-apply" invariant lives in the external private npm package `@centuari-labs/on-chain-effects` (published via GitHub Packages under the `centuari-labs` org). `indexer-v3` processors, `backend-v2`, `settlement-engine`, and the Phase 1 sweeper-bot all depend on the same published version, so every eager-path writer and the indexer tail run byte-identical stamp logic.
+The single source of truth for the "verify-then-apply" invariant lives in the external private npm package `@centuari-labs/on-chain-effects` (published via GitHub Packages under the `centuari-labs` org). `indexer-v3` processors, `backend-v2`, `settlement-engine`, and the Phase 1 sweeper-bot all depend on the same published version, so every eager-path writer and the indexer tail run byte-identical stamp logic. As of C7 (`v0.3.0`) the package owns not just the verify-then-apply *wrapper* but the **per-event upsert SQL itself**: the tx-agnostic mutation functions (`applyCreditedMutation`, `applyDebitedMutation`, `applyRepaidMutation`, `applyLendPositionCreatedMutation`, `applyBorrowPositionCreatedMutation`, `applyLendPositionWithdrawnMutation`, `applyCollateralFlagSetMutation`) plus `isAlreadyStamped` and `hexToBytea`. The indexer processors **and** the eager writers (backend-v2 `apply-*.ts`, settlement-engine `apply-settlement.ts`) call these, so the emitted upsert SQL is identical **by construction**, not kept in sync by code-review discipline.
 
 Signature (sketch):
 
