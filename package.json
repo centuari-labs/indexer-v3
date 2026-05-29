@@ -24,7 +24,7 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@centuari-labs/on-chain-effects": "^0.3.0",
+        "@centuari-labs/on-chain-effects": "^0.4.0",
         "@fastify/cors": "^10.0.1",
         "dotenv": "^16.4.5",
         "fastify": "^5.1.0",

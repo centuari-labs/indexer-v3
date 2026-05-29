@@ -10,6 +10,7 @@ import {
     applyBorrowPositionCreatedMutation,
     applyLendPositionCreatedMutation,
     applyLendPositionWithdrawnMutation,
+    applyMarketCreatedMutation,
     applyRepaidMutation,
     isAlreadyStamped,
 } from "@centuari-labs/on-chain-effects";
@@ -89,23 +90,10 @@ async function handleMarketCreated(ctx: ProcessorContext): Promise<void> {
     const stamps = requireStamps(ctx);
     if (!stamps) return;
 
-    await ctx.client.query(
-        `INSERT INTO market
-            (market_id, loan_token, maturity, created_at,
-             applied_by_tx_hash, applied_by_log_index,
-             applied_by_block_hash, applied_by_block_number)
-         VALUES ($1, $2, $3, now(), $4, $5, $6, $7)
-         ON CONFLICT (market_id) DO NOTHING`,
-        [
-            hexToBytea(args.marketId),
-            hexToBytea(args.loanToken),
-            args.maturity.toString(),
-            hexToBytea(stamps.txHash),
-            stamps.logIndex,
-            hexToBytea(stamps.blockHash),
-            stamps.blockNumber.toString(),
-        ],
-    );
+    // Shared mutation (C7) — same upsert SQL as the backend's eager market
+    // registration. Insert-if-absent; no isAlreadyStamped guard needed since
+    // markets are immutable once created. The tail always has a real stamp.
+    await applyMarketCreatedMutation(ctx.client, args, stamps);
 }
 
 async function handleBorrowPositionCreated(
