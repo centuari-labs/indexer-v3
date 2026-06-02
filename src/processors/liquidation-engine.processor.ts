@@ -1,11 +1,4 @@
-import {
-    type Abi,
-    type Address,
-    type Hex,
-    decodeEventLog,
-    keccak256,
-    toHex,
-} from "viem";
+import { type Abi, type Address, type Hex, decodeEventLog } from "viem";
 import liquidationEngineAbi from "../abi/LiquidationEngine.json" with {
     type: "json",
 };
@@ -13,6 +6,7 @@ import type {
     EventProcessor,
     ProcessorContext,
 } from "../core/event-dispatcher.js";
+import { requireStamps, topicFor } from "../core/stamps.js";
 import { createLogger } from "../observability/logger.js";
 import { hexToBytea } from "../db/bytea.js";
 
@@ -39,40 +33,12 @@ const log = createLogger("liquidation-engine");
  */
 const ABI = liquidationEngineAbi as Abi;
 
-function topicFor(sig: string): Hex {
-    return keccak256(toHex(sig));
-}
-
 const TOPIC_LIQUIDATED = topicFor(
     "Liquidated(address,address,bytes32,address,address,uint256,uint256,bool)",
 );
 const TOPIC_BAD_DEBT_REMAINS = topicFor(
     "BadDebtRemains(address,bytes32,uint256)",
 );
-
-interface Stamps {
-    txHash: Hex;
-    blockHash: Hex;
-    blockNumber: bigint;
-    logIndex: number;
-}
-
-function requireStamps(ctx: ProcessorContext): Stamps | null {
-    if (
-        ctx.log.transactionHash === null ||
-        ctx.log.blockHash === null ||
-        ctx.log.blockNumber === null ||
-        ctx.log.logIndex === null
-    ) {
-        return null;
-    }
-    return {
-        txHash: ctx.log.transactionHash,
-        blockHash: ctx.log.blockHash,
-        blockNumber: ctx.log.blockNumber,
-        logIndex: ctx.log.logIndex,
-    };
-}
 
 async function handleLiquidated(ctx: ProcessorContext): Promise<void> {
     const decoded = decodeEventLog({

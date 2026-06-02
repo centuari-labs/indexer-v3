@@ -1,11 +1,4 @@
-import {
-    type Abi,
-    type Address,
-    type Hex,
-    decodeEventLog,
-    keccak256,
-    toHex,
-} from "viem";
+import { type Abi, type Address, type Hex, decodeEventLog } from "viem";
 import withdrawalRegistryAbi from "../abi/WithdrawalRegistry.json" with {
     type: "json",
 };
@@ -13,6 +6,7 @@ import type {
     EventProcessor,
     ProcessorContext,
 } from "../core/event-dispatcher.js";
+import { requireStamps, topicFor } from "../core/stamps.js";
 import { createLogger } from "../observability/logger.js";
 import { hexToBytea } from "../db/bytea.js";
 
@@ -34,10 +28,6 @@ const log = createLogger("withdrawal-registry");
  */
 const ABI = withdrawalRegistryAbi as Abi;
 
-function topicFor(sig: string): Hex {
-    return keccak256(toHex(sig));
-}
-
 const TOPIC_WITHDRAWAL_REQUESTED = topicFor(
     "WithdrawalRequested(bytes32,address,address,uint256,uint256)",
 );
@@ -53,28 +43,6 @@ const TOPIC_CHAIN_LIQUIDITY_INCREMENTED = topicFor(
 const TOPIC_CHAIN_LIQUIDITY_DECREMENTED = topicFor(
     "ChainLiquidityDecremented(address,uint256,uint256,uint256)",
 );
-
-function requireStamps(ctx: ProcessorContext): {
-    txHash: Hex;
-    blockHash: Hex;
-    blockNumber: bigint;
-    logIndex: number;
-} | null {
-    if (
-        ctx.log.transactionHash === null ||
-        ctx.log.blockHash === null ||
-        ctx.log.blockNumber === null ||
-        ctx.log.logIndex === null
-    ) {
-        return null;
-    }
-    return {
-        txHash: ctx.log.transactionHash,
-        blockHash: ctx.log.blockHash,
-        blockNumber: ctx.log.blockNumber,
-        logIndex: ctx.log.logIndex,
-    };
-}
 
 async function alreadyApplied(
     ctx: ProcessorContext,

@@ -1,11 +1,4 @@
-import {
-    type Abi,
-    type Address,
-    type Hex,
-    decodeEventLog,
-    keccak256,
-    toHex,
-} from "viem";
+import { type Abi, type Address, type Hex, decodeEventLog } from "viem";
 import {
     applyBorrowPositionCreatedMutation,
     applyLendPositionCreatedMutation,
@@ -19,6 +12,7 @@ import type {
     EventProcessor,
     ProcessorContext,
 } from "../core/event-dispatcher.js";
+import { requireStamps, topicFor } from "../core/stamps.js";
 import { createLogger } from "../observability/logger.js";
 import { hexToBytea } from "../db/bytea.js";
 
@@ -35,10 +29,6 @@ const log = createLogger("centuari");
  */
 const ABI = centuariAbi as Abi;
 
-function topicFor(sig: string): Hex {
-    return keccak256(toHex(sig));
-}
-
 const TOPIC_MARKET_CREATED = topicFor("MarketCreated(bytes32,address,uint256)");
 const TOPIC_BORROW_POSITION_CREATED = topicFor(
     "BorrowPositionCreated(bytes32,address,uint256,uint256,uint256)",
@@ -53,30 +43,6 @@ const TOPIC_REPAID = topicFor("Repaid(bytes32,address,uint256)");
 const TOPIC_LIQUIDATION_REPAID = topicFor(
     "LiquidationRepaid(bytes32,address,address,uint256)",
 );
-
-interface Stamps {
-    txHash: Hex;
-    blockHash: Hex;
-    blockNumber: bigint;
-    logIndex: number;
-}
-
-function requireStamps(ctx: ProcessorContext): Stamps | null {
-    if (
-        ctx.log.transactionHash === null ||
-        ctx.log.blockHash === null ||
-        ctx.log.blockNumber === null ||
-        ctx.log.logIndex === null
-    ) {
-        return null;
-    }
-    return {
-        txHash: ctx.log.transactionHash,
-        blockHash: ctx.log.blockHash,
-        blockNumber: ctx.log.blockNumber,
-        logIndex: ctx.log.logIndex,
-    };
-}
 
 async function handleMarketCreated(ctx: ProcessorContext): Promise<void> {
     const decoded = decodeEventLog({
