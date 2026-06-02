@@ -11,7 +11,6 @@ import type { Address } from "viem";
 import { loadConfig } from "./config/env.js";
 import type { ChainConfig } from "./config/chains.js";
 import { createPool } from "./db/pool.js";
-import { runMigrations } from "./db/migrate.js";
 import { createLogger } from "./observability/logger.js";
 import { ChainWatcher, type ContractBinding } from "./core/chain-watcher.js";
 import { buildDispatcher } from "./processors/index.js";
@@ -29,8 +28,9 @@ async function main(): Promise<void> {
     );
     const pool = createPool(cfg.databaseUrl);
 
-    log.info("running migrations");
-    await runMigrations(pool);
+    // Schema is owned and migrated by backend-v2 (the single migration
+    // authority for the shared Postgres database). backend-v2 `pnpm run migrate`
+    // MUST run before this service starts.
 
     const dispatcher = buildDispatcher();
     const watchers = cfg.chains

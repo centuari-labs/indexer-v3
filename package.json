@@ -16,7 +16,6 @@
         "dev": "tsx watch src/index.ts",
         "build": "tsc -p tsconfig.json",
         "start": "node dist/index.js",
-        "migrate": "tsx src/db/migrate.ts",
         "test": "TZ=UTC NODE_OPTIONS=--experimental-vm-modules jest",
         "test:watch": "TZ=UTC NODE_OPTIONS=--experimental-vm-modules jest --watch",
         "lint": "biome check --write src",

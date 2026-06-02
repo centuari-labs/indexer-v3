@@ -1,6 +1,8 @@
 # CLAUDE.md — indexer-v3 (Custom Blockchain Indexer)
 
-> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, four migrations, Fastify ops surface (`/health` + `/metrics` only — data routes removed 2026-05-12), external `@centuari-labs/on-chain-effects` package integrated. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
+> **Status:** feature-complete, hub-only burn-in passed 2026-04-21. Ten processors, Fastify ops surface (`/health` + `/metrics` only — data routes removed 2026-05-12), external `@centuari-labs/on-chain-effects` package integrated. Still unverified against real events: spoke processors, `HubIntentSettler.confirmDeposit` (LZ), Centuari positions processor. Ponder was explicitly rejected — do not reach for it.
+>
+> **Schema ownership (2026-06-02):** this service no longer owns or runs migrations. backend-v2 is the single migration authority for the shared Postgres database — its `genesis_onchain_schema` migration now creates the on-chain tables this service reads/writes. `backend-v2 pnpm run migrate` MUST run before indexer-v3 starts.
 
 ## Stack
 
@@ -18,7 +20,6 @@ Node.js 22 · TypeScript (strict, ES2022, nodenext) · pnpm · Viem (`watchEvent
 pnpm run dev        # tsx watch src/index.ts
 pnpm run build      # tsc
 pnpm run start      # node dist/index.js
-pnpm run migrate    # ts-node migrations/runner.ts (sequential .sql files)
 pnpm run test       # jest (processor unit tests + reorg replay)
 pnpm run lint       # biome check --apply
 pnpm run format     # biome format --write
@@ -31,11 +32,8 @@ All commands MUST run with `TZ=UTC` (docker-compose sets this; for local, prefix
 
 ```
 indexer-v3/
-├── migrations/
-│   ├── 001_init.sql             # Postgres schema (see Schema section)
-│   └── runner.ts                # sequential .sql migration runner
 ├── src/
-│   ├── index.ts                 # entry: load config → migrate → start watchers → start Fastify
+│   ├── index.ts                 # entry: load config → start watchers → start Fastify (schema migrated by backend-v2)
 │   ├── config.ts                # Zod-validated env (DATABASE_URL, per-chain RPC URLs + contract addrs + start blocks)
 │   ├── db/
 │   │   ├── client.ts            # shared pg.Pool
@@ -100,9 +98,9 @@ Behaviour:
 3. Call `mutationFn(tx, stamp)` where `stamp = { tx_hash, log_index, block_hash, block_number }` — the mutation MUST write those four columns onto every row it touches.
 4. Commit. Reorg eviction will later clean up the row if the block is replaced.
 
-## Postgres Schema (migrations/001_init.sql)
+## Postgres Schema (owned by backend-v2 — `migrations/20260602000000_genesis_onchain_schema.sql`)
 
-All timestamp columns are `TIMESTAMPTZ`. Addresses and hashes stored as `BYTEA`. Token amounts as `NUMERIC(78,0)` (fits uint256).
+These tables are created by backend-v2's genesis on-chain migration, not by this service. All timestamp columns are `TIMESTAMPTZ`. Addresses and hashes stored as `BYTEA`. Token amounts as `NUMERIC(78,0)` (fits uint256).
 
 - `block_cursor (chain_id PK, last_block, last_block_hash, updated_at)`
 - `user_balance (user_address, asset, available, in_orders=0, in_yield_router=0, used_as_collateral, flagged_at, applied_by_*, updated_at; PK (user_address, asset))`
@@ -147,13 +145,13 @@ Fastify, JSON only, port `42069`. **Ops surface only** — no consumer-facing da
 
 ## Cross-service tables
 
-The Postgres database is shared with backend-v2, settlement-engine, and the matching-engine's db-writer. Most tables are owned by indexer-v3 (the shared on-chain-state schema in `migrations/001_init.sql`). One Phase 1 table is owned cross-service:
+The Postgres database is shared with backend-v2, settlement-engine, and the matching-engine's db-writer. As of 2026-06-02 **all** schema (including the shared on-chain-state tables this service reads/writes) is owned and migrated by backend-v2 — see `backend-v2/src/core/database/migrations/20260602000000_genesis_onchain_schema.sql`. This service only reads/writes rows; it no longer creates tables.
 
 | Table | Migration owner | Writers | Notes |
 |---|---|---|---|
-| `pending_collateral_flags` | backend-v2 (`20260506120000_add_pending_collateral_flags.sql`) | backend-v2 INSERT/DELETE; settlement-engine DELETE; indexer-v3 (this service) DELETE | Pre-settlement intent buffer for collateral flags. The user toggles via `POST /collateral/flag` (backend INSERTs); backend dequeues on `POST /collateral/unflag` if the asset is still queue-only; settlement-engine eager-DELETEs on the receipt of its own `Settlement.settleMatches` tx; this indexer DELETEs in `balance-ledger.processor.ts.handleCollateralFlagSet` for every observed `CollateralFlagSet` (covers direct-caller `CollateralManager.flag(asset)` events and any eager-path crashes). All four DELETE paths are idempotent — `DELETE WHERE` is naturally a no-op on a missing row. |
+| `pending_collateral_flags` | backend-v2 (`20260602000100_genesis_app_schema.sql`) | backend-v2 INSERT/DELETE; settlement-engine DELETE; indexer-v3 (this service) DELETE | Pre-settlement intent buffer for collateral flags. The user toggles via `POST /collateral/flag` (backend INSERTs); backend dequeues on `POST /collateral/unflag` if the asset is still queue-only; settlement-engine eager-DELETEs on the receipt of its own `Settlement.settleMatches` tx; this indexer DELETEs in `balance-ledger.processor.ts.handleCollateralFlagSet` for every observed `CollateralFlagSet` (covers direct-caller `CollateralManager.flag(asset)` events and any eager-path crashes). All four DELETE paths are idempotent — `DELETE WHERE` is naturally a no-op on a missing row. |
 
-Future consolidation: move the migration into indexer-v3's runner so the schema home matches the cross-service write surface. Deferred — it would require coordinating downtime across all consuming services, and the current setup works.
+Schema consolidation (2026-06-02): all migrations — including the on-chain-state tables this service reads/writes — now live in backend-v2, the single migration authority. indexer-v3 no longer runs migrations at boot, so `backend-v2 pnpm run migrate` must run before this service starts.
 
 ## Code Standards
 
@@ -203,7 +201,7 @@ cd smart-contract-revamp && ./bin/sync-to-services.sh
 
 ## Verification (Module 8 exit criteria)
 
-- `pnpm run dev` boots, runs migrations, connects to all five chains, begins tailing.
+- `pnpm run dev` boots (against a backend-v2-migrated database), connects to all five chains, begins tailing.
 - `curl localhost:42069/health` reports per-chain block-lag under 10s on testnet.
 - `curl localhost:42069/metrics` returns Prometheus output with `indexer_block_lag_seconds` per chain.
 - Trigger a deposit via `HubDepositor.deposit` on Arbitrum Sepolia → `SELECT available FROM user_balance WHERE user_address = $1 AND asset = $2` shows updated value within 2 seconds.
