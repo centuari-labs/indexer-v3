@@ -56,6 +56,7 @@ const baseEnvSchema = z.object({
     WITHDRAWAL_REGISTRY_ADDRESS: optionalHex,
     SETTLEMENT_LEDGER_ADDRESS: optionalHex,
     COLLATERAL_MANAGER_ADDRESS: optionalHex,
+    LIQUIDATION_ENGINE_ADDRESS: optionalHex,
 
     // Spokes
     SPOKE_BASE_CHAIN_ID: z.coerce.number().int().positive().optional(),
@@ -137,6 +138,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
             withdrawalRegistry: env.WITHDRAWAL_REGISTRY_ADDRESS,
             settlementLedger: env.SETTLEMENT_LEDGER_ADDRESS,
             collateralManager: env.COLLATERAL_MANAGER_ADDRESS,
+            liquidationEngine: env.LIQUIDATION_ENGINE_ADDRESS,
         }),
     ];
 

@@ -62,6 +62,7 @@ describe("block-cursor", () => {
             "market",
             "borrow_position",
             "lend_position",
+            "liquidation_event",
         ];
         for (const t of stampedTables) {
             const del = fake.findBySqlContains(`DELETE FROM ${t}`);

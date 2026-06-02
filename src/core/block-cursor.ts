@@ -67,6 +67,7 @@ export async function rewindTo(
         "market",
         "borrow_position",
         "lend_position",
+        "liquidation_event",
     ];
     for (const table of stampedTables) {
         await client.query(
