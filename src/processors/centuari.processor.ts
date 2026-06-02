@@ -50,6 +50,9 @@ const TOPIC_LEND_POSITION_WITHDRAWN = topicFor(
     "LendPositionWithdrawn(bytes32,address,uint256,uint256)",
 );
 const TOPIC_REPAID = topicFor("Repaid(bytes32,address,uint256)");
+const TOPIC_LIQUIDATION_REPAID = topicFor(
+    "LiquidationRepaid(bytes32,address,address,uint256)",
+);
 
 interface Stamps {
     txHash: Hex;
@@ -168,6 +171,57 @@ async function handleRepaid(ctx: ProcessorContext): Promise<void> {
     }
 }
 
+async function handleLiquidationRepaid(ctx: ProcessorContext): Promise<void> {
+    const decoded = decodeEventLog({
+        abi: ABI,
+        data: ctx.log.data,
+        topics: ctx.log.topics,
+    });
+    if (decoded.eventName !== "LiquidationRepaid") return;
+    // LiquidationRepaid carries `liquidator` too; the debt row only needs
+    // (marketId, borrower, amount), so the existing applyRepaidMutation is the
+    // identical effect — there is no second writer to diverge from.
+    const args = decoded.args as unknown as {
+        marketId: Hex;
+        borrower: Address;
+        liquidator: Address;
+        amount: bigint;
+    };
+    const stamps = requireStamps(ctx);
+    if (!stamps) return;
+
+    if (
+        await isAlreadyStamped(
+            ctx.client,
+            "borrow_position",
+            "market_id = $1 AND borrower = $2",
+            [hexToBytea(args.marketId), hexToBytea(args.borrower)],
+            stamps,
+        )
+    ) {
+        return;
+    }
+
+    // Same invariant as Repaid: do NOT touch used_as_collateral. On a full
+    // collateral seizure the flag clears via BalanceLedger.CollateralFlagSet,
+    // handled in balance-ledger.processor.
+    const rowCount = await applyRepaidMutation(
+        ctx.client,
+        {
+            marketId: args.marketId,
+            borrower: args.borrower,
+            amount: args.amount,
+        },
+        stamps,
+    );
+    if (rowCount === 0) {
+        log.warn(
+            { marketId: args.marketId, borrower: args.borrower },
+            "LiquidationRepaid for missing or already-zero borrow position",
+        );
+    }
+}
+
 async function handleLendPositionCreated(ctx: ProcessorContext): Promise<void> {
     const decoded = decodeEventLog({
         abi: ABI,
@@ -279,10 +333,18 @@ export const repaid: EventProcessor = {
     handle: handleRepaid,
 };
 
+export const liquidationRepaid: EventProcessor = {
+    contract: "Centuari",
+    event: "LiquidationRepaid",
+    topic0: TOPIC_LIQUIDATION_REPAID,
+    handle: handleLiquidationRepaid,
+};
+
 export const centuariProcessors: EventProcessor[] = [
     marketCreated,
     borrowPositionCreated,
     lendPositionCreated,
     lendPositionWithdrawn,
     repaid,
+    liquidationRepaid,
 ];

@@ -76,6 +76,7 @@ function bindContracts(chain: ChainConfig): ContractBinding[] {
     push("WithdrawalRegistry", c.withdrawalRegistry);
     push("SettlementLedger", c.settlementLedger);
     push("CollateralManager", c.collateralManager);
+    push("LiquidationEngine", c.liquidationEngine);
     push("SpokeDepositGateway", c.spokeDepositGateway);
     push("SpokeVaultStable", c.spokeVaultStable);
     return bindings;

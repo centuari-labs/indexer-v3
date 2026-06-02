@@ -2,6 +2,7 @@ import {
     borrowPositionCreated,
     lendPositionCreated,
     lendPositionWithdrawn,
+    liquidationRepaid,
     marketCreated,
     repaid,
 } from "../../src/processors/centuari.processor.js";
@@ -76,6 +77,19 @@ const REPAID_EVENT = {
         { name: "amount", type: "uint256", indexed: false },
     ],
 } as const;
+
+const LIQUIDATION_REPAID_EVENT = {
+    type: "event",
+    name: "LiquidationRepaid",
+    inputs: [
+        { name: "marketId", type: "bytes32", indexed: true },
+        { name: "borrower", type: "address", indexed: true },
+        { name: "liquidator", type: "address", indexed: true },
+        { name: "amount", type: "uint256", indexed: false },
+    ],
+} as const;
+
+const LIQUIDATOR = "0x6666666666666666666666666666666666666666" as const;
 
 describe("centuari processor", () => {
     test("MarketCreated upserts market with INSERT...DO NOTHING shape", async () => {
@@ -236,5 +250,55 @@ describe("centuari processor", () => {
         expect(upd!.sql).not.toContain("user_balance");
         expect(upd!.sql).toContain("debt = GREATEST(debt - $3::numeric, 0)");
         expect(upd!.params[2]).toBe("200");
+    });
+
+    test("LiquidationRepaid decrements debt via the same Repaid mutation, untouched flag", async () => {
+        const fake = new FakePoolClient();
+        stageNotYetStamped(fake);
+
+        await liquidationRepaid.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: LIQUIDATION_REPAID_EVENT,
+                args: {
+                    marketId: MARKET_ID,
+                    borrower: BORROWER,
+                    liquidator: LIQUIDATOR,
+                    amount: 750n,
+                },
+            }),
+        });
+        const upd = fake.findBySqlContains("UPDATE borrow_position");
+        expect(upd).toBeDefined();
+        // Identical effect to Repaid: debt floored at 0, no collateral/balance writes.
+        expect(upd!.sql).not.toContain("used_as_collateral");
+        expect(upd!.sql).not.toContain("user_balance");
+        expect(upd!.sql).toContain("debt = GREATEST(debt - $3::numeric, 0)");
+        expect(upd!.sql).toContain("WHERE market_id = $1 AND borrower = $2");
+        expect(upd!.params[0]).toEqual(hexToBytea(MARKET_ID));
+        expect(upd!.params[1]).toEqual(hexToBytea(BORROWER));
+        expect(upd!.params[2]).toBe("750");
+    });
+
+    test("LiquidationRepaid skips when already stamped", async () => {
+        const fake = new FakePoolClient();
+        stageAlreadyStamped(fake);
+        await liquidationRepaid.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: LIQUIDATION_REPAID_EVENT,
+                args: {
+                    marketId: MARKET_ID,
+                    borrower: BORROWER,
+                    liquidator: LIQUIDATOR,
+                    amount: 1n,
+                },
+            }),
+        });
+        expect(fake.filterBySqlContains("UPDATE borrow_position")).toHaveLength(
+            0,
+        );
     });
 });

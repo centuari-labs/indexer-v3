@@ -26,6 +26,7 @@ export interface ChainContracts {
     withdrawalRegistry?: Hex;
     settlementLedger?: Hex;
     collateralManager?: Hex;
+    liquidationEngine?: Hex;
 
     spokeDepositGateway?: Hex;
     spokeVaultStable?: Hex;
