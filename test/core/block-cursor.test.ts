@@ -67,8 +67,11 @@ describe("block-cursor", () => {
         for (const t of stampedTables) {
             const del = fake.findBySqlContains(`DELETE FROM ${t}`);
             expect(del).toBeDefined();
-            expect(del!.sql).toContain("applied_by_block_number > $1");
-            expect(del!.params[0]).toBe("100");
+            // C1: every stamped-table delete is chain-scoped + height-scoped.
+            expect(del!.sql).toContain("applied_by_chain_id = $1");
+            expect(del!.sql).toContain("applied_by_block_number > $2");
+            expect(del!.params[0]).toBe(HUB);
+            expect(del!.params[1]).toBe("100");
         }
 
         // deposit_event uses block_number directly (chain-scoped)

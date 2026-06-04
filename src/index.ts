@@ -10,11 +10,23 @@ dotenv.config();
 import type { Address } from "viem";
 import { loadConfig } from "./config/env.js";
 import type { ChainConfig } from "./config/chains.js";
-import { createPool } from "./db/pool.js";
+import { createPool, createSmallPool } from "./db/pool.js";
 import { createLogger } from "./observability/logger.js";
 import { ChainWatcher, type ContractBinding } from "./core/chain-watcher.js";
+import { ensureChainIdColumns } from "./core/chain-scope.js";
 import { buildDispatcher } from "./processors/index.js";
 import { buildServer } from "./api/server.js";
+
+/**
+ * M3: bind the unauthenticated ops surface (`/health` + `/metrics`) to loopback
+ * in production so it isn't exposed on a routable interface. In dev/test it
+ * binds `0.0.0.0` for convenience (docker port-mapping, host curl). Override
+ * with `OPS_BIND_HOST` if production needs a specific internal interface.
+ */
+function opsBindHost(nodeEnv: string): string {
+    if (process.env.OPS_BIND_HOST) return process.env.OPS_BIND_HOST;
+    return nodeEnv === "production" ? "127.0.0.1" : "0.0.0.0";
+}
 
 const log = createLogger("main");
 
@@ -27,10 +39,19 @@ async function main(): Promise<void> {
             : "multi-chain mode — hub + spokes",
     );
     const pool = createPool(cfg.databaseUrl);
+    // M4: a dedicated tiny pool for /health so ops scrapes can't exhaust the
+    // shared watcher pool.
+    const healthPool = createSmallPool(cfg.databaseUrl);
 
     // Schema is owned and migrated by backend-v2 (the single migration
     // authority for the shared Postgres database). backend-v2 `pnpm run migrate`
     // MUST run before this service starts.
+    //
+    // C1 safety net: ensure the `applied_by_chain_id` chain-scope column exists
+    // (idempotent ADD COLUMN IF NOT EXISTS + hub default + backfill). This is a
+    // no-op once the backend-v2 migration that adds the column ships, but keeps
+    // reorg eviction chain-scoped even before that migration is deployed.
+    await ensureChainIdColumns(pool);
 
     const dispatcher = buildDispatcher();
     const watchers = cfg.chains
@@ -46,14 +67,16 @@ async function main(): Promise<void> {
 
     for (const w of watchers) void w.start();
 
-    const app = await buildServer({ pool });
-    await app.listen({ host: "0.0.0.0", port: cfg.port });
-    log.info({ port: cfg.port }, "indexer-v3 listening");
+    const app = await buildServer({ healthPool });
+    const host = opsBindHost(cfg.nodeEnv);
+    await app.listen({ host, port: cfg.port });
+    log.info({ port: cfg.port, host }, "indexer-v3 listening");
 
     const shutdown = async (signal: string) => {
         log.info({ signal }, "shutting down");
         for (const w of watchers) w.stop();
         await app.close();
+        await healthPool.end();
         await pool.end();
         process.exit(0);
     };

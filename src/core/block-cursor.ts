@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import type { Hex } from "viem";
 import { byteaToHex, hexToBytea } from "../db/bytea.js";
 import { deleteRecentHashesAbove } from "./recent-hashes.js";
+import { APPLIED_BY_CHAIN_ID, STAMPED_TABLES } from "./stamped-tables.js";
 
 export interface BlockCursorRow {
     chainId: number;
@@ -57,24 +58,19 @@ export async function rewindTo(
     forkPointBlock: bigint,
     forkPointBlockHash: Hex,
 ): Promise<void> {
-    // Delete every stamped row that was written beyond the fork point.
-    // Any entity carrying applied_by_block_number participates in reorg eviction.
-    const stampedTables = [
-        "user_balance",
-        "withdrawal_request",
-        "cross_chain_deposit",
-        "chain_liquidity",
-        "market",
-        "borrow_position",
-        "lend_position",
-        "liquidation_event",
-    ];
-    for (const table of stampedTables) {
+    // Delete every stamped row that was written beyond the fork point ON THIS
+    // CHAIN. `applied_by_block_number` is per-chain and heights overlap across
+    // the hub and the 4 spokes, so the delete MUST be scoped by
+    // `applied_by_chain_id` (C1) — otherwise a spoke reorg evicts unrelated hub
+    // rows at the same numeric height. Any entity carrying
+    // `applied_by_block_number` participates in reorg eviction.
+    for (const table of STAMPED_TABLES) {
         await client.query(
             `DELETE FROM ${table}
-              WHERE applied_by_block_number IS NOT NULL
-                AND applied_by_block_number > $1`,
-            [forkPointBlock.toString()],
+              WHERE ${APPLIED_BY_CHAIN_ID} = $1
+                AND applied_by_block_number IS NOT NULL
+                AND applied_by_block_number > $2`,
+            [chainId, forkPointBlock.toString()],
         );
     }
     // deposit_event is append-only keyed by (tx_hash, log_index) — evict by block_number directly.

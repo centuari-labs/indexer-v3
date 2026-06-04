@@ -1,7 +1,11 @@
 import { jest } from "@jest/globals";
 import type { PublicClient } from "viem";
 import type { BlockCursorRow } from "../../src/core/block-cursor.js";
-import { findForkPoint } from "../../src/core/reorg-detector.js";
+import {
+    BlockUnavailableError,
+    findForkPoint,
+    ReorgTooDeepError,
+} from "../../src/core/reorg-detector.js";
 import { hexToBytea } from "../../src/db/bytea.js";
 import { FakePoolClient, asPoolClient } from "../helpers/fake-client.js";
 
@@ -13,9 +17,7 @@ interface FakeBlock {
     hash: `0x${string}` | null;
 }
 
-function makeViemClient(
-    blocks: Map<bigint, FakeBlock>,
-): PublicClient {
+function makeViemClient(blocks: Map<bigint, FakeBlock>): PublicClient {
     return {
         getBlock: jest.fn(async ({ blockNumber }: { blockNumber: bigint }) => {
             return blocks.get(blockNumber) ?? { hash: null };
@@ -32,10 +34,13 @@ describe("findForkPoint", () => {
 
     test("returns undefined when persisted hash matches live chain at cursor", async () => {
         const fake = new FakePoolClient();
-        const viem = makeViemClient(
-            new Map([[110n, { hash: HASH(0xaa) }]]),
+        const viem = makeViemClient(new Map([[110n, { hash: HASH(0xaa) }]]));
+        const result = await findForkPoint(
+            viem,
+            asPoolClient(fake),
+            cursor,
+            12,
         );
-        const result = await findForkPoint(viem, asPoolClient(fake), cursor, 12);
         expect(result).toBeUndefined();
         // Critical: should not query recent_hashes when no reorg.
         expect(fake.recorded).toHaveLength(0);
@@ -62,7 +67,12 @@ describe("findForkPoint", () => {
                 [107n, { hash: HASH(0xee) }],
             ]),
         );
-        const result = await findForkPoint(viem, asPoolClient(fake), cursor, 12);
+        const result = await findForkPoint(
+            viem,
+            asPoolClient(fake),
+            cursor,
+            12,
+        );
         expect(result).toEqual({
             forkPointBlock: 108n,
             forkPointBlockHash: HASH(0xdd),
@@ -83,17 +93,52 @@ describe("findForkPoint", () => {
         );
         await expect(
             findForkPoint(viem, asPoolClient(fake), cursor, 12),
-        ).rejects.toThrow(/deeper than finalityDepth/);
+        ).rejects.toBeInstanceOf(ReorgTooDeepError);
     });
 
-    test("throws when recent_block_hashes is empty during a reorg", async () => {
+    test("throws a TRANSIENT BlockUnavailableError when recent_block_hashes is empty during a reorg (M2)", async () => {
         const fake = new FakePoolClient();
         fake.queueResponse([]); // no persisted recent hashes
         const viem = makeViemClient(
             new Map([[110n, { hash: HASH(0x11) }]]), // diverged
         );
+        // M2: an empty buffer at apparent divergence is treated as retryable
+        // (cold start / post-prune), NOT a hard wedge.
         await expect(
             findForkPoint(viem, asPoolClient(fake), cursor, 12),
-        ).rejects.toThrow(/recent_block_hashes is empty/);
+        ).rejects.toBeInstanceOf(BlockUnavailableError);
+    });
+
+    test("M2: cold-start sentinel cursor hash returns undefined without querying recent_hashes", async () => {
+        const fake = new FakePoolClient();
+        const sentinelCursor: BlockCursorRow = {
+            chainId: HUB,
+            lastBlock: 0n,
+            lastBlockHash: `0x${"00".repeat(32)}`,
+        };
+        const viem = makeViemClient(new Map());
+        const result = await findForkPoint(
+            viem,
+            asPoolClient(fake),
+            sentinelCursor,
+            12,
+        );
+        expect(result).toBeUndefined();
+        // Must not even hit the DB or RPC for the sentinel.
+        expect(fake.recorded).toHaveLength(0);
+    });
+
+    test("H1: too-deep reorg throws ReorgTooDeepError carrying the chain id", async () => {
+        const fake = new FakePoolClient();
+        fake.queueResponse([
+            { block_number: "110", block_hash: hexToBytea(HASH(0xbb)) },
+        ]);
+        const viem = makeViemClient(new Map([[110n, { hash: HASH(0x11) }]]));
+        await expect(
+            findForkPoint(viem, asPoolClient(fake), cursor, 12),
+        ).rejects.toMatchObject({
+            name: "ReorgTooDeepError",
+            chainId: HUB,
+        });
     });
 });
