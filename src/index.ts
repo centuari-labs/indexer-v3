@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: path.resolve(process.cwd(), ".env.contracts") });
 dotenv.config();
 
-import type { Address } from "viem";
+import { type Address, isAddressEqual } from "viem";
 import { loadConfig } from "./config/env.js";
 import type { ChainConfig } from "./config/chains.js";
 import { createPool, createSmallPool } from "./db/pool.js";
@@ -28,6 +28,8 @@ function opsBindHost(nodeEnv: string): string {
 }
 
 const log = createLogger("main");
+
+const ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
 
 async function main(): Promise<void> {
     const cfg = loadConfig();
@@ -83,7 +85,7 @@ function bindContracts(chain: ChainConfig): ContractBinding[] {
     const bindings: ContractBinding[] = [];
     const c = chain.contracts;
     const push = (name: string, addr: Address | undefined) => {
-        if (addr && addr !== "0x0000000000000000000000000000000000000000") {
+        if (addr && !isAddressEqual(addr, ZERO_ADDRESS)) {
             bindings.push({ name, address: addr });
         }
     };
