@@ -46,17 +46,35 @@ export async function getRecentHashes(
     }));
 }
 
-/** Delete rows with block_number <= threshold. Used to bound table size. */
+/**
+ * Delete rows with block_number <= threshold to bound table size, while NEVER
+ * shrinking the retained window below `finalityDepth` blocks back from the head
+ * (M1).
+ *
+ * The reorg detector needs at least `finalityDepth + 1` recent hashes to locate
+ * a fork point; pruning too aggressively (e.g. a large prune cutoff relative to
+ * the current head) would empty the buffer and spuriously wedge the chain on the
+ * next divergence. We clamp the effective cutoff so at least the last
+ * `finalityDepth` hashes below `headBlock` are always kept.
+ */
 export async function pruneRecentHashes(
     client: PoolClient,
     chainId: number,
     olderThanOrEqual: bigint,
+    headBlock: bigint,
+    finalityDepth: number,
 ): Promise<void> {
-    if (olderThanOrEqual < 0n) return;
+    // Never prune anything within finalityDepth of the head.
+    const protectedFloor = headBlock - BigInt(finalityDepth);
+    let cutoff = olderThanOrEqual;
+    if (protectedFloor < cutoff) {
+        cutoff = protectedFloor;
+    }
+    if (cutoff < 0n) return;
     await client.query(
         `DELETE FROM recent_block_hashes
           WHERE chain_id = $1 AND block_number <= $2`,
-        [chainId, olderThanOrEqual.toString()],
+        [chainId, cutoff.toString()],
     );
 }
 

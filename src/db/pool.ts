@@ -11,6 +11,21 @@ export function createPool(databaseUrl: string): Pool {
     return new Pool(config);
 }
 
+/**
+ * A small, dedicated pool for the ops `/health` endpoint (M4). Capping it at 2
+ * connections — separate from the shared 10-connection watcher pool — means a
+ * burst of health scrapes can't exhaust the connections the chain watchers need
+ * to advance.
+ */
+export function createSmallPool(databaseUrl: string): Pool {
+    const config: PoolConfig = {
+        connectionString: databaseUrl,
+        max: 2,
+        idleTimeoutMillis: 30_000,
+    };
+    return new Pool(config);
+}
+
 export function getPool(databaseUrl?: string): Pool {
     if (singleton) return singleton;
     if (!databaseUrl) {

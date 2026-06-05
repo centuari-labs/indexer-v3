@@ -38,3 +38,17 @@ export const cursorBlock = new Gauge({
     labelNames: ["chain_id"],
     registers: [registry],
 });
+
+/**
+ * 1 when a chain is "wedged" — a reorg deeper than the configured finality
+ * depth was detected and the watcher cannot self-heal. 0 otherwise. Set to 1 on
+ * `ReorgTooDeepError`, cleared back to 0 once a tick completes cleanly. `/health`
+ * reads the same per-chain state and reports the chain unhealthy so a wedged
+ * chain stops looking healthy to ops. (H1)
+ */
+export const chainWedged = new Gauge({
+    name: "indexer_chain_wedged",
+    help: "1 when a chain is wedged by a too-deep reorg (needs operator intervention); 0 when healthy.",
+    labelNames: ["chain_id"],
+    registers: [registry],
+});
