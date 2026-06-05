@@ -4,6 +4,7 @@ import {
     createPublicClient,
     fallback,
     http,
+    isAddressEqual,
     type Log,
     type PublicClient,
     webSocket,
@@ -277,16 +278,24 @@ export class ChainWatcher {
     ): Promise<void> {
         const pruneCutoff = BigInt(this.chain.finalityDepth) * 2n;
         for (let blockNumber = from; blockNumber <= to; blockNumber++) {
+            // L3: one getLogs across ALL bound contracts for this block
+            // (viem accepts `address` as an array) instead of O(contracts)
+            // round-trips. Group the returned logs back to their contract by
+            // address so the downstream { contractName, logs } structure — and
+            // the dispatch loop below — is unchanged.
+            const blockLogs = await this.client.getLogs({
+                address: this.contracts.map((c) => c.address),
+                fromBlock: blockNumber,
+                toBlock: blockNumber,
+            });
             const logsByContract: {
                 contractName: string;
                 logs: Log[];
             }[] = [];
             for (const contract of this.contracts) {
-                const logs = await this.client.getLogs({
-                    address: contract.address,
-                    fromBlock: blockNumber,
-                    toBlock: blockNumber,
-                });
+                const logs = blockLogs.filter((log) =>
+                    isAddressEqual(log.address, contract.address),
+                );
                 if (logs.length > 0) {
                     logsByContract.push({
                         contractName: contract.name,

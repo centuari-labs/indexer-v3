@@ -212,6 +212,9 @@ async function handlePayoutDispatched(ctx: ProcessorContext): Promise<void> {
     // No state change — Authorized already moved us to PROCESSING. Just refresh
     // stamps + updated_at to record that the payout was dispatched; surface the
     // lzGuid in structured logs for operator correlation with LZ Scan.
+    // State guard (mirrors transitionState): only touch a row still in
+    // PROCESSING so a replayed/duplicate PayoutDispatched can't re-stamp a row
+    // that has since moved to a terminal COMPLETED/FAILED state.
     const res = await ctx.client.query(
         `UPDATE withdrawal_request
             SET updated_at = now(),
@@ -219,7 +222,8 @@ async function handlePayoutDispatched(ctx: ProcessorContext): Promise<void> {
                 applied_by_log_index = $3,
                 applied_by_block_hash = $4,
                 applied_by_block_number = $5
-          WHERE request_id = $1`,
+          WHERE request_id = $1
+            AND state = 'PROCESSING'`,
         [
             hexToBytea(args.requestId),
             hexToBytea(stamps.txHash),
