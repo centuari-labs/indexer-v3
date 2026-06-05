@@ -13,7 +13,6 @@ import type { ChainConfig } from "./config/chains.js";
 import { createPool, createSmallPool } from "./db/pool.js";
 import { createLogger } from "./observability/logger.js";
 import { ChainWatcher, type ContractBinding } from "./core/chain-watcher.js";
-import { ensureChainIdColumns } from "./core/chain-scope.js";
 import { buildDispatcher } from "./processors/index.js";
 import { buildServer } from "./api/server.js";
 
@@ -45,13 +44,9 @@ async function main(): Promise<void> {
 
     // Schema is owned and migrated by backend-v2 (the single migration
     // authority for the shared Postgres database). backend-v2 `pnpm run migrate`
-    // MUST run before this service starts.
-    //
-    // C1 safety net: ensure the `applied_by_chain_id` chain-scope column exists
-    // (idempotent ADD COLUMN IF NOT EXISTS + hub default + backfill). This is a
-    // no-op once the backend-v2 migration that adds the column ships, but keeps
-    // reorg eviction chain-scoped even before that migration is deployed.
-    await ensureChainIdColumns(pool);
+    // MUST run before this service starts. This includes the C1
+    // `applied_by_chain_id` column on the stamped tables, which `rewindTo` and
+    // `stampChainIdForBlock` rely on for chain-scoped reorg eviction.
 
     const dispatcher = buildDispatcher();
     const watchers = cfg.chains

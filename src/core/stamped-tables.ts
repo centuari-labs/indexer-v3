@@ -16,23 +16,30 @@
  * Adding the chain id to every delete's WHERE makes a reorg on one chain evict
  * only that chain's rows.
  *
- * WHERE the column is populated from
- * ----------------------------------
- * The per-event upsert SQL lives in the external `@centuari-labs/on-chain-effects`
- * package, which this service cannot edit and which does NOT write
- * `applied_by_chain_id`. The indexer therefore stamps the column itself, on its
- * OWN write path: after dispatching every log for a block, `chain-watcher`
- * stamps `applied_by_chain_id = <chainId>` on exactly the rows that block wrote
+ * WHO owns the column vs. WHO populates it
+ * -----------------------------------------
+ * The column itself — `ADD COLUMN applied_by_chain_id`, its hub-chain-id
+ * DEFAULT, the pre-C1 backfill, and the index — is created by a backend-v2
+ * migration. backend-v2 is the single migration authority for the shared
+ * Postgres schema; this service runs NO DDL (`backend-v2 pnpm run migrate` must
+ * run before indexer-v3 starts).
+ *
+ * This service only populates the column at runtime. The per-event upsert SQL
+ * lives in the external `@centuari-labs/on-chain-effects` package, which this
+ * service cannot edit and which does NOT write `applied_by_chain_id`. The
+ * indexer therefore stamps the column itself, on its OWN write path: after
+ * dispatching every log for a block, `chain-watcher` stamps
+ * `applied_by_chain_id = <chainId>` on exactly the rows that block wrote
  * (scoped by the globally-unique `applied_by_block_hash`). Eager-path writers
  * (backend-v2, settlement-engine, sweeper-bot) write only HUB rows, so the
- * column's DB default of the hub chain id (`DEFAULT_HUB_CHAIN_ID`) covers their
- * inserts correctly. See `chain-scope.ts`.
+ * column's DB default (the hub chain id) covers their inserts correctly. See
+ * `chain-scope.ts`.
  */
 
 /**
- * Hub chain id (Arbitrum Sepolia). Used as the backfill value for pre-C1 rows
- * and as the column default so eager-path inserts (hub-only) are chain-scoped
- * without the writers having to set the column.
+ * Hub chain id (Arbitrum Sepolia). Mirrors the value the backend-v2 migration
+ * uses as the column DEFAULT and pre-C1 backfill; kept here as the canonical
+ * named reference for the hub discriminator.
  */
 export const DEFAULT_HUB_CHAIN_ID = 421614;
 
