@@ -167,9 +167,14 @@ describe("withdrawal-registry processor", () => {
         });
         const upd = fake.findBySqlContains("UPDATE withdrawal_request");
         expect(upd).toBeDefined();
-        // No state mutation here — just stamp refresh.
-        expect(upd!.sql).not.toContain("state =");
+        // No state mutation — the SET clause only refreshes stamps + updated_at
+        // (so no parameterized `state = $` assignment). A defensive
+        // `AND state = 'PROCESSING'` WHERE guard IS expected and asserted below:
+        // a replayed/duplicate PayoutDispatched must not re-stamp a row that has
+        // since moved to a terminal COMPLETED/FAILED state.
+        expect(upd!.sql).not.toContain("state = $");
         expect(upd!.sql).toContain("WHERE request_id = $1");
+        expect(upd!.sql).toContain("state = 'PROCESSING'");
     });
 
     test("ChainLiquidityIncremented writes newTotal verbatim, not a delta", async () => {
