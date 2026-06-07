@@ -59,7 +59,13 @@ async function main(): Promise<void> {
         .filter((w) => w.contracts.length > 0)
         .map(
             ({ chain, contracts }) =>
-                new ChainWatcher({ chain, pool, dispatcher, contracts }),
+                new ChainWatcher({
+                    chain,
+                    pool,
+                    dispatcher,
+                    contracts,
+                    tuning: cfg.tuning,
+                }),
         );
 
     for (const w of watchers) void w.start();

@@ -37,6 +37,15 @@ const baseEnvSchema = z.object({
     // required. Default false → index the hub + all 4 spokes (full mode).
     HUB_ONLY: envFlag,
 
+    // Watcher throughput / safety tuning (defaults match the historical
+    // hard-coded constants). On a fast hub, raise INDEXER_LOGS_RANGE_CHUNK /
+    // INDEXER_HEADER_CONCURRENCY so the indexer keeps pace without a code change.
+    INDEXER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(4000),
+    INDEXER_MAX_BLOCKS_PER_TICK: z.coerce.bigint().positive().default(500n),
+    INDEXER_LOGS_RANGE_CHUNK: z.coerce.bigint().positive().default(2000n),
+    INDEXER_HEADER_CONCURRENCY: z.coerce.number().int().positive().default(10),
+    INDEXER_HEADER_RETRIES: z.coerce.number().int().nonnegative().default(2),
+
     // Hub (Arbitrum)
     HUB_CHAIN_ID: z.coerce.number().int().positive(),
     HUB_RPC_URL_WS: z.string().url(),
@@ -117,6 +126,14 @@ export interface AppConfig {
     nodeEnv: "development" | "test" | "production";
     hubOnly: boolean;
     chains: ChainConfig[];
+    /** Watcher poll-loop tuning, applied to every ChainWatcher. */
+    tuning: {
+        pollIntervalMs: number;
+        maxBlocksPerTick: bigint;
+        logsRangeChunk: bigint;
+        headerConcurrency: number;
+        headerRetries: number;
+    };
 }
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -173,6 +190,13 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
         nodeEnv: env.NODE_ENV,
         hubOnly: env.HUB_ONLY,
         chains,
+        tuning: {
+            pollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,
+            maxBlocksPerTick: env.INDEXER_MAX_BLOCKS_PER_TICK,
+            logsRangeChunk: env.INDEXER_LOGS_RANGE_CHUNK,
+            headerConcurrency: env.INDEXER_HEADER_CONCURRENCY,
+            headerRetries: env.INDEXER_HEADER_RETRIES,
+        },
     };
 }
 
