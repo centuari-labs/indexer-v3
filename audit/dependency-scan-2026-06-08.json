@@ -1,0 +1,172 @@
+{
+  "actions": [
+    {
+      "action": "update",
+      "resolves": [
+        {
+          "id": 1117870,
+          "path": ".>fastify>@fastify/ajv-compiler>fast-uri",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1117884,
+          "path": ".>fastify>@fastify/ajv-compiler>fast-uri",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "module": "fast-uri",
+      "target": "3.1.2",
+      "depth": 4
+    },
+    {
+      "action": "review",
+      "module": "ws",
+      "resolves": [
+        {
+          "id": 1119108,
+          "path": ".>viem>ws",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ]
+    }
+  ],
+  "advisories": {
+    "1117870": {
+      "findings": [
+        {
+          "version": "3.1.0",
+          "paths": [
+            ".>fastify>@fastify/ajv-compiler>fast-uri"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/fastify/fast-uri/security/advisories/GHSA-q3j6-qgpj-74h6\n- https://nvd.nist.gov/vuln/detail/CVE-2026-6321\n- https://cna.openjsf.org/security-advisories.html\n- https://github.com/advisories/GHSA-q3j6-qgpj-74h6",
+      "created": "2026-05-08T17:15:09.000Z",
+      "id": 1117870,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n\n`fast-uri` v3.1.0 and earlier decodes percent-encoded path separators (`%2F`) and dot segments (`%2E`) before applying dot-segment removal in `normalize()` and `equal()`. This makes encoded path data behave like real `/` and `..`, so distinct URIs collapse onto the same normalized path.\n\nFor example, `http://example.com/public/%2e%2e/admin` normalizes to `http://example.com/admin`, and `equal()` considers them the same URI.\n\nApplications that normalize or compare attacker-controlled URLs to enforce path-based policy can be bypassed. A path that looks confined under an allowed prefix can normalize to a different location.\n\n### Patches\n\nUpgrade to `fast-uri` >= 3.1.1.\n\n### Workarounds\n\nNone. Upgrade to the patched version.",
+      "reported_by": null,
+      "title": "fast-uri vulnerable to path traversal via percent-encoded dot segments",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-6321"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "fast-uri",
+      "vulnerable_versions": "<=3.1.0",
+      "github_advisory_id": "GHSA-q3j6-qgpj-74h6",
+      "recommendation": "Upgrade to version 3.1.1 or later",
+      "patched_versions": ">=3.1.1",
+      "updated": "2026-05-08T17:15:11.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      },
+      "cwe": [
+        "CWE-22"
+      ],
+      "url": "https://github.com/advisories/GHSA-q3j6-qgpj-74h6"
+    },
+    "1117884": {
+      "findings": [
+        {
+          "version": "3.1.0",
+          "paths": [
+            ".>fastify>@fastify/ajv-compiler>fast-uri"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/fastify/fast-uri/security/advisories/GHSA-v39h-62p7-jpjc\n- https://nvd.nist.gov/vuln/detail/CVE-2026-6322\n- https://cna.openjsf.org/security-advisories.html\n- https://github.com/advisories/GHSA-v39h-62p7-jpjc",
+      "created": "2026-05-08T19:13:01.000Z",
+      "id": 1117884,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n\n`fast-uri` v3.1.1 and earlier decodes percent-encoded authority delimiters (`%40` as `@`, `%3A` as `:`) inside the host component and serializes them back as raw characters. This changes the URI structure, turning a hostname into userinfo plus a different host.\n\nFor example, `http://trusted.com%40evil.com/` normalizes to `http://trusted.com@evil.com/`, which reparses as host `evil.com` with userinfo `trusted.com`.\n\nApplications that normalize untrusted URLs before host allowlist checks, redirect validation, or outbound request routing can be steered to a different authority than the original URL appeared to contain.\n\n### Patches\n\nUpgrade to `fast-uri` >= 3.1.2.\n\n### Workarounds\n\nNone. Upgrade to the patched version.",
+      "reported_by": null,
+      "title": "fast-uri vulnerable to host confusion via percent-encoded authority delimiters",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-6322"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "fast-uri",
+      "vulnerable_versions": "<=3.1.1",
+      "github_advisory_id": "GHSA-v39h-62p7-jpjc",
+      "recommendation": "Upgrade to version 3.1.2 or later",
+      "patched_versions": ">=3.1.2",
+      "updated": "2026-05-08T19:13:02.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      },
+      "cwe": [
+        "CWE-436"
+      ],
+      "url": "https://github.com/advisories/GHSA-v39h-62p7-jpjc"
+    },
+    "1119108": {
+      "findings": [
+        {
+          "version": "8.18.3",
+          "paths": [
+            ".>viem>ws"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/websockets/ws/security/advisories/GHSA-58qx-3vcg-4xpx\n- https://nvd.nist.gov/vuln/detail/CVE-2026-45736\n- https://github.com/websockets/ws/commit/c0327ec15a54d701eb6ccefaa8bef328cfc03086\n- https://github.com/advisories/GHSA-58qx-3vcg-4xpx",
+      "created": "2026-05-18T19:02:40.000Z",
+      "id": 1119108,
+      "npm_advisory_id": null,
+      "overview": "### Impact\n\nThe `websocket.close()` implementation is vulnerable to uninitialized memory disclosure when a `TypedArray` is passed as the reason argument.\n\n### Proof of concept\n\n```js\nimport { deepStrictEqual } from 'node:assert';\nimport { WebSocket, WebSocketServer } from 'ws';\n\nconst wss = new WebSocketServer(\n  { port: 0, skipUTF8Validation: true },\n  function () {\n    const { port } = wss.address();\n    const ws = new WebSocket(`ws://localhost:${port}`, {\n      skipUTF8Validation: true\n    });\n\n    ws.on('close', function (code, reason) {\n      deepStrictEqual(reason, Buffer.alloc(80));\n    });\n  }\n);\n\nwss.on('connection', function (ws) {\n  ws.close(1000, new Float32Array(20));\n});\n```\n\n### Patches\n\nThe vulnerability was fixed in ws@8.20.1 (https://github.com/websockets/ws/commit/c0327ec15a54d701eb6ccefaa8bef328cfc03086).\n\n### Credits\n\nCredit for the private and responsible disclosure of this issue goes to [Nikita Skovoroda](https://github.com/ChALkeR).\n\n### Remarks\n\nAlthough the calculated CVSS severity is medium, the actual severity is believed to be low, as the flaw is only exploitable through misuse that is unlikely in practice.\n\n### Resources\n\n- https://github.com/advisories/GHSA-58qx-3vcg-4xpx\n- https://www.cve.org/CVERecord?id=CVE-2026-45736",
+      "reported_by": null,
+      "title": "ws: Uninitialized memory disclosure",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-45736"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "ws",
+      "vulnerable_versions": ">=8.0.0 <8.20.1",
+      "github_advisory_id": "GHSA-58qx-3vcg-4xpx",
+      "recommendation": "Upgrade to version 8.20.1 or later",
+      "patched_versions": ">=8.20.1",
+      "updated": "2026-05-18T19:02:42.000Z",
+      "cvss": {
+        "score": 4.4,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "cwe": [
+        "CWE-908"
+      ],
+      "url": "https://github.com/advisories/GHSA-58qx-3vcg-4xpx"
+    }
+  },
+  "muted": [],
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 1,
+      "high": 2,
+      "critical": 0
+    },
+    "dependencies": 446,
+    "devDependencies": 0,
+    "optionalDependencies": 0,
+    "totalDependencies": 446
+  }
+}

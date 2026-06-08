@@ -11,6 +11,7 @@ import { makeHubChain } from "../helpers/chain.js";
 import {
     FakePoolClient,
     asPoolClient,
+    stageAlreadyStamped,
     stageNotYetStamped,
 } from "../helpers/fake-client.js";
 import { makeLog } from "../helpers/log.js";
@@ -198,5 +199,100 @@ describe("withdrawal-registry processor", () => {
         expect(ins!.sql).toContain("amount = EXCLUDED.amount");
         // params: token, chainId, newTotal (not amount), tx, logIdx, blockHash, blockNum
         expect(ins!.params[2]).toBe("5000");
+    });
+});
+
+/**
+ * Idempotency: every handler consults `alreadyApplied` (SELECT count on
+ * applied_by_tx_hash / applied_by_log_index) before mutating. When the same
+ * (tx_hash, log_index) has already been stamped — the indexer tail re-seeing an
+ * event an eager-path writer already applied, or a duplicate log delivery — the
+ * handler must early-return and issue NO mutation. We stage the guard SELECT to
+ * return 1 and assert the only recorded query is that guard.
+ */
+describe("withdrawal-registry processor — idempotency (already-stamped no-op)", () => {
+    test("WithdrawalRequested skips the INSERT when (tx_hash, log_index) is already stamped", async () => {
+        const fake = new FakePoolClient();
+        stageAlreadyStamped(fake);
+        await withdrawalRequested.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: WITHDRAWAL_REQUESTED_EVENT,
+                args: {
+                    requestId: REQUEST_ID,
+                    user: USER,
+                    asset: ASSET,
+                    amount: 1000n,
+                    targetChainId: 84532n,
+                },
+            }),
+        });
+        expect(
+            fake.findBySqlContains("INSERT INTO withdrawal_request"),
+        ).toBeUndefined();
+        // The idempotency guard SELECT is the only DB round-trip.
+        expect(fake.recorded).toHaveLength(1);
+        expect(fake.recorded[0].sql).toContain("count(*)");
+    });
+
+    test("WithdrawalAuthorized transition is a no-op when already stamped", async () => {
+        const fake = new FakePoolClient();
+        stageAlreadyStamped(fake);
+        await withdrawalAuthorized.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: WITHDRAWAL_AUTHORIZED_EVENT,
+                args: { requestId: REQUEST_ID },
+            }),
+        });
+        expect(
+            fake.findBySqlContains("UPDATE withdrawal_request"),
+        ).toBeUndefined();
+        expect(fake.recorded).toHaveLength(1);
+    });
+
+    test("PayoutDispatched re-stamp is a no-op when already stamped", async () => {
+        const fake = new FakePoolClient();
+        stageAlreadyStamped(fake);
+        await payoutDispatched.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: PAYOUT_DISPATCHED_EVENT,
+                args: {
+                    requestId: REQUEST_ID,
+                    targetChainId: 84532n,
+                    lzGuid: ("0x" + "ab".repeat(32)) as `0x${string}`,
+                },
+            }),
+        });
+        expect(
+            fake.findBySqlContains("UPDATE withdrawal_request"),
+        ).toBeUndefined();
+        expect(fake.recorded).toHaveLength(1);
+    });
+
+    test("ChainLiquidityIncremented skips the upsert when already stamped", async () => {
+        const fake = new FakePoolClient();
+        stageAlreadyStamped(fake);
+        await chainLiquidityIncremented.handle({
+            client: asPoolClient(fake),
+            chain: makeHubChain(),
+            log: makeLog({
+                event: CHAIN_LIQUIDITY_INC_EVENT,
+                args: {
+                    asset: ASSET,
+                    chainId: 84532n,
+                    amount: 100n,
+                    newTotal: 5000n,
+                },
+            }),
+        });
+        expect(
+            fake.findBySqlContains("INSERT INTO chain_liquidity"),
+        ).toBeUndefined();
+        expect(fake.recorded).toHaveLength(1);
     });
 });
