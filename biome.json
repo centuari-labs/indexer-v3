@@ -28,7 +28,9 @@
             }
         }
     },
-    "files": {},
+    "files": {
+        "includes": ["**", "!src/abi"]
+    },
     "assist": {
         "actions": {
             "source": {
