@@ -3,5 +3,6 @@ dist
 .env*
 .env.local
 *.log
+*.bak*
 coverage
 .DS_Store
