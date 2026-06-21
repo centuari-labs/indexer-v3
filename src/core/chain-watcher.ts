@@ -20,6 +20,7 @@ import {
 import { getCursor, rewindTo, upsertCursor } from "./block-cursor.js";
 import { stampChainIdForBlock } from "./chain-scope.js";
 import type { EventDispatcher } from "./event-dispatcher.js";
+import { fetchLogsByBlock, resolveBlockHashes } from "./log-fetch.js";
 import { pruneRecentHashes, recordBlockHash } from "./recent-hashes.js";
 import {
     BlockUnavailableError,
@@ -36,13 +37,38 @@ import { clearChainWedged, markChainWedged } from "./wedged-chains.js";
  */
 const CURSOR_LOCK_NAMESPACE = 0x6376_3378; // "cv3x"
 
-const POLL_INTERVAL_MS = 4_000;
-
 /**
- * Cap on blocks processed per tick. Keeps reorg checks frequent on long
- * backlogs (e.g. after an outage) and bounds per-tick DB work.
+ * Throughput / safety knobs for a watcher's poll loop. Defaults match the
+ * historical hard-coded constants; production overrides them via env
+ * (INDEXER_* — see config/env.ts) so the indexer can keep pace with a fast hub
+ * without a code change.
  */
-const MAX_BLOCKS_PER_TICK = 500n;
+export interface ChainWatcherTuning {
+    /** Sleep between ticks (ms). */
+    pollIntervalMs: number;
+    /**
+     * Cap on blocks processed per tick. Keeps reorg checks frequent on long
+     * backlogs (e.g. after an outage) and bounds per-tick DB work.
+     */
+    maxBlocksPerTick: bigint;
+    /**
+     * Max block span per ranged `getLogs` call. Auto-halves on RPC range-limit
+     * errors. Should be >= maxBlocksPerTick so a normal tick is a single call.
+     */
+    logsRangeChunk: bigint;
+    /** Max concurrent `getBlock` header fetches for empty (zero-log) blocks. */
+    headerConcurrency: number;
+    /** Retries for a transient empty-block header miss before giving up the tick. */
+    headerRetries: number;
+}
+
+export const DEFAULT_TUNING: ChainWatcherTuning = {
+    pollIntervalMs: 4_000,
+    maxBlocksPerTick: 500n,
+    logsRangeChunk: 2_000n,
+    headerConcurrency: 10,
+    headerRetries: 2,
+};
 
 export interface ContractBinding {
     name: string;
@@ -54,6 +80,13 @@ export interface ChainWatcherOptions {
     pool: Pool;
     dispatcher: EventDispatcher;
     contracts: ContractBinding[];
+    /** Override poll-loop knobs. Missing fields fall back to DEFAULT_TUNING. */
+    tuning?: Partial<ChainWatcherTuning>;
+    /**
+     * Inject a viem client (tests). In production the client is built from the
+     * chain's WS+HTTP fallback transport.
+     */
+    client?: PublicClient;
 }
 
 /**
@@ -66,6 +99,7 @@ export class ChainWatcher {
     private readonly dispatcher: EventDispatcher;
     private readonly contracts: ContractBinding[];
     private readonly client: PublicClient;
+    private readonly tuning: ChainWatcherTuning;
     private readonly log = createLogger("chain-watcher");
     private stopped = false;
 
@@ -74,12 +108,17 @@ export class ChainWatcher {
         this.pool = opts.pool;
         this.dispatcher = opts.dispatcher;
         this.contracts = opts.contracts;
-        this.client = createPublicClient({
-            transport: fallback([
-                webSocket(this.chain.rpcUrlWs, { reconnect: { attempts: 10 } }),
-                http(this.chain.rpcUrlHttp),
-            ]),
-        });
+        this.tuning = { ...DEFAULT_TUNING, ...opts.tuning };
+        this.client =
+            opts.client ??
+            createPublicClient({
+                transport: fallback([
+                    webSocket(this.chain.rpcUrlWs, {
+                        reconnect: { attempts: 10 },
+                    }),
+                    http(this.chain.rpcUrlHttp),
+                ]),
+            });
     }
 
     async start(): Promise<void> {
@@ -124,7 +163,7 @@ export class ChainWatcher {
                     );
                 }
             }
-            await sleep(POLL_INTERVAL_MS);
+            await sleep(this.tuning.pollIntervalMs);
         }
     }
 
@@ -160,8 +199,8 @@ export class ChainWatcher {
             if (from > finalized) return;
 
             const to =
-                finalized - from > MAX_BLOCKS_PER_TICK
-                    ? from + MAX_BLOCKS_PER_TICK - 1n
+                finalized - from > this.tuning.maxBlocksPerTick
+                    ? from + this.tuning.maxBlocksPerTick - 1n
                     : finalized;
 
             await this.processRange(pgClient, from, to);
@@ -260,68 +299,82 @@ export class ChainWatcher {
         }
     }
 
+    /** Group a block's logs back to their bound contract by address. */
+    private groupByContract(
+        blockLogs: Log[],
+    ): { contractName: string; logs: Log[] }[] {
+        const logsByContract: { contractName: string; logs: Log[] }[] = [];
+        for (const contract of this.contracts) {
+            const logs = blockLogs.filter((log) =>
+                isAddressEqual(log.address, contract.address),
+            );
+            if (logs.length > 0) {
+                logsByContract.push({ contractName: contract.name, logs });
+            }
+        }
+        return logsByContract;
+    }
+
     /**
-     * Process blocks [from, to] one at a time. For each block we:
-     *   1. Collect every log across all bound contracts at that block number.
-     *   2. Fetch the block header once.
-     *   3. In a single pg tx: dispatch logs, upsert cursor, record the block
-     *      hash in recent_block_hashes, prune old entries.
+     * Process blocks [from, to]. RPC fetching is BATCHED up front, then each
+     * block is persisted in its own pg tx:
+     *   Phase A — ONE ranged getLogs across the whole range (auto-chunked +
+     *             halved on RPC range-limits), grouped by block number. This
+     *             replaces the previous O(blocks) getLogs round-trips and is the
+     *             dominant throughput win.
+     *   Phase B — resolve a hash for EVERY block: non-empty blocks reuse the
+     *             blockHash on their logs (no round-trip); empty blocks fetch
+     *             getBlock with bounded concurrency. All RPC happens before any
+     *             DB write, so a persistent header miss aborts the whole tick
+     *             (zero commits) and the next tick re-derives — preserving the
+     *             transient BlockUnavailableError contract (H3).
+     *   Phase C — the per-block atomic tx, unchanged: dispatch logs, upsert
+     *             cursor, record the block hash, stamp chain id, prune.
      *
-     * Block-by-block iteration (rather than contract-outer / block-inner)
+     * Per-block iteration in Phase C (rather than contract-outer / block-inner)
      * guarantees cursor + entity rows + recent_block_hashes advance atomically
-     * for a single block. reorg-detector depends on that invariant.
+     * for a single block. A hash is recorded for EVERY block — including zero-log
+     * blocks — so the reorg-detector's fork-point walk sees a dense buffer.
      */
-    private async processRange(
+    protected async processRange(
         pgClient: import("pg").PoolClient,
         from: bigint,
         to: bigint,
     ): Promise<void> {
         const pruneCutoff = BigInt(this.chain.finalityDepth) * 2n;
-        for (let blockNumber = from; blockNumber <= to; blockNumber++) {
-            // L3: one getLogs across ALL bound contracts for this block
-            // (viem accepts `address` as an array) instead of O(contracts)
-            // round-trips. Group the returned logs back to their contract by
-            // address so the downstream { contractName, logs } structure — and
-            // the dispatch loop below — is unchanged.
-            const blockLogs = await this.client.getLogs({
-                address: this.contracts.map((c) => c.address),
-                fromBlock: blockNumber,
-                toBlock: blockNumber,
-            });
-            const logsByContract: {
-                contractName: string;
-                logs: Log[];
-            }[] = [];
-            for (const contract of this.contracts) {
-                const logs = blockLogs.filter((log) =>
-                    isAddressEqual(log.address, contract.address),
-                );
-                if (logs.length > 0) {
-                    logsByContract.push({
-                        contractName: contract.name,
-                        logs,
-                    });
-                }
-            }
+        const addresses = this.contracts.map((c) => c.address);
 
-            // H3: a block that was just listed by getLogs can vanish mid-range
-            // (evicted, or queried during a reorg before the new head settled).
-            // Treat "no header" as a TRANSIENT reorg/availability signal, not a
-            // hard fault — the watcher retries next tick and either re-fetches
-            // or detects the reorg cleanly. Throwing a generic Error here fed
-            // the silent 4s retry churn (H1).
-            let block: Awaited<ReturnType<PublicClient["getBlock"]>>;
-            try {
-                block = await this.client.getBlock({ blockNumber });
-            } catch (err) {
-                throw new BlockUnavailableError(this.chain.id, blockNumber, {
-                    cause: err,
-                });
-            }
-            if (!block.hash) {
+        // Phase A: one ranged getLogs (chunked + halving) grouped by block.
+        const logsByBlock = await fetchLogsByBlock(
+            this.client,
+            addresses,
+            from,
+            to,
+            this.tuning.logsRangeChunk,
+        );
+
+        // Phase B: a hash for every block (logs for non-empty, getBlock for empty).
+        const hashByBlock = await resolveBlockHashes(
+            this.client,
+            this.chain.id,
+            from,
+            to,
+            logsByBlock,
+            this.tuning.headerConcurrency,
+            this.tuning.headerRetries,
+        );
+
+        // Phase C: per-block atomic commit.
+        for (let blockNumber = from; blockNumber <= to; blockNumber++) {
+            const blockHash = hashByBlock.get(blockNumber);
+            if (!blockHash) {
+                // resolveBlockHashes guarantees coverage; a miss here is a
+                // transient gap (mid-reorg eviction) — retry next tick.
                 throw new BlockUnavailableError(this.chain.id, blockNumber);
             }
-            const blockHash = block.hash;
+            const logsByContract = this.groupByContract(
+                logsByBlock.get(blockNumber) ?? [],
+            );
 
             await pgClient.query("BEGIN");
             try {
