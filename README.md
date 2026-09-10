@@ -23,7 +23,7 @@ two-writer idempotency model. indexer-v3 is therefore a hand-rolled Viem event
 watcher: no subgraphs, code generation, or indexing framework.
 
 The code can construct one `ChainWatcher` per configured chain, but the launch
-configuration deliberately constructs only the hub watcher. This keeps the
+configuration constructs only the hub watcher. This keeps the
 active deployment focused on Arbitrum Sepolia while preserving a clear seam for
 the deferred multi-chain phase.
 
@@ -48,7 +48,7 @@ flowchart TD
 
 ### Chain watcher
 
-- **One watcher in the active process** — the Arbitrum Sepolia hub watcher is
+- **One watcher in the active process:** the Arbitrum Sepolia hub watcher is
   created when `HUB_ONLY=true`; spoke watchers are skipped entirely.
 - The watcher uses a Viem `PublicClient` with a WebSocket transport and HTTP
   fallback.
@@ -136,7 +136,8 @@ spoke RPCs in the active launch.
 
 ## Data surface
 
-The indexer exposes no consumer-facing data API — only operational endpoints.
+The indexer exposes no consumer-facing data API. It provides operational
+endpoints only.
 `backend-v2` and `matching-engine` query the shared PostgreSQL schema directly;
 the frontend never talks to the indexer.
 
@@ -250,11 +251,11 @@ RPCs. Never point a local test run at a shared or production database.
 
 ## Conventions
 
-- **Zod at every boundary** — validate environment values and RPC-decoded
+- **Zod at every boundary:** validate environment values and RPC-decoded
   arguments; never trust `unknown`.
-- **Raw `pg`, no ORM** — use parameterised queries only.
-- **Transactional per block** — never commit in the middle of a block.
-- **Idempotency stamps are mandatory** — processors must preserve all four
+- **Raw `pg`, no ORM:** use parameterised queries only.
+- **Transactional per block:** never commit in the middle of a block.
+- **Idempotency stamps are mandatory:** processors must preserve all four
   `applied_by_*` columns when they mutate stamped tables.
 - **Pino structured logs**, never `console.log`.
 - **Biome** formatting and strict TypeScript with `noUncheckedIndexedAccess`.
